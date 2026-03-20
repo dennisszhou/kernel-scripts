@@ -1,0 +1,235 @@
+#!/usr/bin/python3
+
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+PATCH_CMD = ["patch", "-f", "-p1"]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Review an ordered patch directory in Neovim"
+    )
+    parser.add_argument("patch_dir", help="directory containing patch files")
+    parser.add_argument(
+        "--pattern",
+        default="*.patch",
+        help="glob for patch files when no series file exists",
+    )
+    parser.add_argument(
+        "nvim_args",
+        nargs=argparse.REMAINDER,
+        help="additional Neovim arguments after --",
+    )
+    return parser.parse_args()
+
+
+def read_patch_list(patch_dir: Path, pattern: str) -> list[Path]:
+    series_file = patch_dir / "series"
+    if series_file.exists():
+        patches = []
+        for raw_line in series_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            patch_name = line.split()[0]
+            patch_path = patch_dir / patch_name
+            if not patch_path.is_file():
+                raise FileNotFoundError(f"series entry missing on disk: {patch_path}")
+            patches.append(patch_path)
+        return patches
+
+    patches = sorted(path for path in patch_dir.glob(pattern) if path.is_file())
+    return patches
+
+
+def touched_files(patch_path: Path) -> list[str]:
+    files: list[str] = []
+    seen: set[str] = set()
+
+    def add_path(raw_path: str) -> None:
+        path = raw_path.strip()
+        if not path or path == "/dev/null":
+            return
+        if path.startswith(("a/", "b/")):
+            path = path[2:]
+        if path not in seen:
+            seen.add(path)
+            files.append(path)
+
+    with patch_path.open("r", encoding="utf-8", errors="replace") as patch_file:
+        for line in patch_file:
+            if line.startswith("diff --git "):
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    add_path(parts[2])
+                    add_path(parts[3])
+                continue
+            if line.startswith("--- ") or line.startswith("+++ "):
+                add_path(line[4:].strip().split("\t", 1)[0])
+
+    return files
+
+
+def copy_if_exists(src_root: Path, dst_root: Path, rel_path: str) -> None:
+    src_path = src_root / rel_path
+    if not src_path.exists():
+        return
+    dst_path = dst_root / rel_path
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src_path, dst_path)
+
+
+def apply_patch(work_dir: Path, patch_path: Path) -> None:
+    with patch_path.open("r", encoding="utf-8") as patch_file:
+        subprocess.check_call(PATCH_CMD, stdin=patch_file, cwd=work_dir)
+
+
+def build_review_layout(src_root: Path, patch_paths: list[Path], temp_root: Path) -> list[str]:
+    left_dir = temp_root / "a"
+    right_dir = temp_root / "b"
+    state_dir = temp_root / "state"
+    left_dir.mkdir(parents=True, exist_ok=True)
+    right_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    name_width = max((len(path.name) for path in patch_paths), default=0)
+    review_files: list[str] = []
+    previous_state = src_root
+
+    for idx, patch_path in enumerate(patch_paths, start=1):
+        files = sorted(set(touched_files(patch_path)))
+        before_dir = state_dir / f"{idx:04d}-before"
+        after_dir = state_dir / f"{idx:04d}-after"
+        before_dir.mkdir(parents=True, exist_ok=True)
+        after_dir.mkdir(parents=True, exist_ok=True)
+
+        for rel_path in files:
+            copy_if_exists(previous_state, before_dir, rel_path)
+            copy_if_exists(previous_state, after_dir, rel_path)
+
+        try:
+            apply_patch(after_dir, patch_path)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"failed to apply patch against base tree: {patch_path}") from exc
+
+        for rel_path in files:
+            before_path = before_dir / rel_path
+            after_path = after_dir / rel_path
+            if not before_path.exists():
+                before_path.parent.mkdir(parents=True, exist_ok=True)
+                before_path.touch()
+            if not after_path.exists():
+                after_path.parent.mkdir(parents=True, exist_ok=True)
+                after_path.touch()
+            if before_path.read_bytes() == after_path.read_bytes():
+                continue
+
+            review_name = (
+                f"{idx:04d} {patch_path.name.ljust(name_width)} {rel_path.replace('/', ':')}"
+            )
+            shutil.copyfile(before_path, left_dir / review_name)
+            shutil.copyfile(after_path, right_dir / review_name)
+            review_files.append(review_name)
+
+        previous_state = after_dir
+
+    return review_files
+
+
+def write_review_script(temp_root: Path, review_files: list[str]) -> Path:
+    script_path = temp_root / "review.vim"
+
+    def vim_str(value: str) -> str:
+        return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
+
+    pair_entries = []
+    for name in review_files:
+        pair_entries.append(
+            "[%s, %s, %s]"
+            % (
+                vim_str(str(temp_root / "a" / name)),
+                vim_str(str(temp_root / "b" / name)),
+                vim_str(name.replace(":", "/")),
+            )
+        )
+
+    lines = [
+        "set nosplitbelow",
+        "set nosplitright",
+        "set noswapfile",
+        "set shadafile=NONE",
+        "set diffopt+=linematch:60",
+        "let g:review_pairs = [%s]" % ", ".join(pair_entries),
+        "let g:review_index = 0",
+        "function! ReviewOpen(idx) abort",
+        "  if empty(g:review_pairs)",
+        "    echo 'No review files were generated'",
+        "    return",
+        "  endif",
+        "  if a:idx < 0 || a:idx >= len(g:review_pairs)",
+        "    echo 'No more review files'",
+        "    return",
+        "  endif",
+        "  let g:review_index = a:idx",
+        "  let l:pair = g:review_pairs[a:idx]",
+        "  silent! diffoff!",
+        "  silent! only",
+        "  execute 'edit ' . fnameescape(l:pair[0])",
+        "  setlocal readonly nomodifiable",
+        "  diffthis",
+        "  execute 'vert diffsplit ' . fnameescape(l:pair[1])",
+        "  setlocal readonly nomodifiable",
+        "  diffthis",
+        "  wincmd h",
+        "  echo printf('[%d/%d] %s', g:review_index + 1, len(g:review_pairs), l:pair[2])",
+        "endfunction",
+        "function! ReviewNext() abort",
+        "  call ReviewOpen(g:review_index + 1)",
+        "endfunction",
+        "function! ReviewPrev() abort",
+        "  call ReviewOpen(g:review_index - 1)",
+        "endfunction",
+        "command! ReviewNext call ReviewNext()",
+        "command! ReviewPrev call ReviewPrev()",
+        "nnoremap ]r <Cmd>ReviewNext<CR>",
+        "nnoremap [r <Cmd>ReviewPrev<CR>",
+        "call ReviewOpen(0)",
+    ]
+    script_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return script_path
+
+
+def main() -> int:
+    args = parse_args()
+    nvim_args = args.nvim_args
+    if nvim_args and nvim_args[0] == "--":
+        nvim_args = nvim_args[1:]
+
+    patch_dir = Path(args.patch_dir).resolve()
+    if not patch_dir.is_dir():
+        print(f"missing patch directory: {patch_dir}", file=sys.stderr)
+        return 2
+
+    patch_paths = read_patch_list(patch_dir, args.pattern)
+    if not patch_paths:
+        print(f"no patches found in {patch_dir}", file=sys.stderr)
+        return 1
+
+    temp_root = Path(tempfile.mkdtemp(prefix="patchreview-", dir="/tmp"))
+    try:
+        review_files = build_review_layout(Path.cwd(), patch_paths, temp_root)
+        script_path = write_review_script(temp_root, review_files)
+        return subprocess.call(["nvim", "-S", str(script_path), *nvim_args])
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
