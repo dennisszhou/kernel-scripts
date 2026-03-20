@@ -1,0 +1,147 @@
+# Minimal kernel config fragment for QEMU arm64 (virt machine)
+#
+# Usage (native arm64 host — e.g. Apple Silicon):
+#   cp kconfig.arm64.minimal .config
+#   kbuild ARCH=arm64 olddefconfig
+#   kbuild ARCH=arm64 -j$(nproc)
+#
+# Usage (cross-compile from x86_64):
+#   cp kconfig.arm64.minimal .config
+#   kbuild ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+#   kbuild ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+#
+# Boots on: qemu-system-aarch64 -M virt -cpu cortex-a72
+
+#----------------------------------------------------------------------
+# Core / boot
+#----------------------------------------------------------------------
+CONFIG_64BIT=y
+CONFIG_ARM64=y
+CONFIG_SMP=y
+CONFIG_PRINTK=y
+CONFIG_BUG=y
+CONFIG_EMBEDDED=y
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+
+CONFIG_IKCONFIG=y
+CONFIG_IKCONFIG_PROC=y
+
+#----------------------------------------------------------------------
+# ARM64 platform — QEMU virt machine
+#----------------------------------------------------------------------
+CONFIG_ARCH_VIRT=y
+
+#----------------------------------------------------------------------
+# Device Tree (required for arm64 boot)
+#----------------------------------------------------------------------
+CONFIG_OF=y
+
+#----------------------------------------------------------------------
+# Block layer
+#----------------------------------------------------------------------
+CONFIG_BLOCK=y
+
+#----------------------------------------------------------------------
+# Serial console — PL011 UART (QEMU virt default)
+#----------------------------------------------------------------------
+CONFIG_TTY=y
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+
+#----------------------------------------------------------------------
+# Virtio (disk, net, console)
+#----------------------------------------------------------------------
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_HW_RANDOM_VIRTIO=y
+
+#----------------------------------------------------------------------
+# SCSI (some QEMU disk backends)
+#----------------------------------------------------------------------
+CONFIG_SCSI=y
+CONFIG_BLK_DEV_SD=y
+
+#----------------------------------------------------------------------
+# Filesystems
+#----------------------------------------------------------------------
+CONFIG_EXT4_FS=y
+CONFIG_TMPFS=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+
+#----------------------------------------------------------------------
+# Initramfs support
+#----------------------------------------------------------------------
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+CONFIG_RD_XZ=y
+
+#----------------------------------------------------------------------
+# Networking (minimal)
+#----------------------------------------------------------------------
+CONFIG_NET=y
+CONFIG_NETDEVICES=y
+CONFIG_INET=y
+CONFIG_PACKET=y
+CONFIG_UNIX=y
+
+#----------------------------------------------------------------------
+# Timers / IRQ — GIC + arch timers (required for QEMU virt)
+#----------------------------------------------------------------------
+CONFIG_ARM_GIC=y
+CONFIG_ARM_GIC_V3=y
+CONFIG_ARM_ARCH_TIMER=y
+
+#----------------------------------------------------------------------
+# PCI (virtio-pci needs this)
+#----------------------------------------------------------------------
+CONFIG_PCI=y
+CONFIG_PCI_HOST_GENERIC=y
+
+#----------------------------------------------------------------------
+# RTC — PL031 (QEMU virt provides this)
+#----------------------------------------------------------------------
+CONFIG_RTC_CLASS=y
+CONFIG_RTC_DRV_PL031=y
+
+#----------------------------------------------------------------------
+# Power management — PSCI (how QEMU virt does poweroff/reboot)
+#----------------------------------------------------------------------
+CONFIG_ARM_PSCI_FW=y
+
+#----------------------------------------------------------------------
+# Misc required bits
+#----------------------------------------------------------------------
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+CONFIG_FUTEX=y
+CONFIG_EPOLL=y
+CONFIG_SIGNALFD=y
+CONFIG_TIMERFD=y
+CONFIG_EVENTFD=y
+CONFIG_AIO=y
+CONFIG_INOTIFY_USER=y
+
+#----------------------------------------------------------------------
+# Disable things we don't need
+#----------------------------------------------------------------------
+# CONFIG_SOUND is not set
+# CONFIG_USB is not set
+# CONFIG_WLAN is not set
+# CONFIG_WIRELESS is not set
+# CONFIG_BLUETOOTH is not set
+# CONFIG_INPUT_MOUSE is not set
+# CONFIG_INPUT_KEYBOARD is not set
+# CONFIG_DRM is not set
+# CONFIG_FB is not set
+# CONFIG_SWAP is not set
+# CONFIG_NFS_FS is not set
+# CONFIG_SECURITY_SELINUX is not set
+# CONFIG_AUDIT is not set

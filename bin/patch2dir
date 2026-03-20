@@ -1,0 +1,184 @@
+#!/usr/bin/python3
+
+import sys
+import os
+import subprocess
+import shutil
+import filecmp
+from pathlib import Path, PurePath
+
+lsdiff_cmd = ['lsdiff', '--strip=1', '--']
+patch_cmd = ['patch', '-f', '-p1']
+patch_r_cmd = ['patch', '-f', '-R', '-p1']
+hier_stem = 'hier'
+flat_step = 'flat'
+
+top = 0
+src = None
+dst = None
+all_patches = []
+all_patch_names = []
+all_files = []
+patch_name_max_len = 0
+
+def hier_path_str(idx, a_or_b):
+    return '%s/hier/%s/%04d-%s' % (str(dst), a_or_b, idx + 1,
+                                   all_patch_names[idx])
+
+def patch_dir(dir_s, dir_a, dir_b, patch, reverse):
+    if reverse:
+        tmp = dir_a
+        dir_a = dir_b
+        dir_b = tmp
+
+    # copy the original files to both A and B dirs
+    for file in all_files:
+        dir_s_path = Path(dir_s + '/' + file)
+        if not dir_s_path.exists():
+            continue
+
+        dir_a_parent = Path(PurePath(dir_a + '/' + file).parents[0])
+        if not dir_a_parent.exists():
+            dir_a_parent.mkdir(parents=True)
+        shutil.copyfile(str(dir_s_path), dir_a + '/' + file)
+
+        dir_b_parent = Path(PurePath(dir_b + '/' + file).parents[0])
+        if not dir_b_parent.exists():
+            dir_b_parent.mkdir(parents=True)
+        shutil.copyfile(str(dir_s_path), dir_b + '/' + file)
+
+    # apply the patch
+    if not Path(patch).exists():
+        return True
+
+    patch_file = open(patch, 'r')
+    orig_cwd = os.getcwd()
+    os.chdir(dir_b)
+
+    ret = True
+    try:
+        subprocess.check_call(patch_r_cmd if reverse else patch_cmd,
+                              stdin = patch_file)
+    except subprocess.CalledProcessError:
+        print('failed to apply %s, aborting %s direction' %
+              (patch, 'reverse' if reverse else 'forward'), file=sys.stderr)
+        ret = False
+
+    os.chdir(orig_cwd)
+    return ret
+
+def flatten_dir(a_or_b):
+    flat_base = '%s/%s' % (str(dst), a_or_b)
+    Path(flat_base).mkdir(parents=True)
+    for i in range(len(all_patches)):
+        name = all_patch_names[i]
+        flat_stem = '%s/%04d %s ' % (flat_base, i + 1,
+                                     name.ljust(patch_name_max_len))
+        for file in all_files:
+            hier_file = hier_path_str(i, a_or_b) + '/' + file
+            flat_file = flat_stem + file.replace('/', ':')
+            if (Path(hier_file).exists()):
+                shutil.copyfile(hier_file, flat_file)
+
+#
+# Control starts here.
+#
+dstpath = None
+do_dst = False
+opt_disabled = False
+
+for arg in sys.argv[1:]:
+    if (do_dst):
+        dstpath = arg
+        do_dst = False
+        continue
+
+    if (not opt_disabled and arg == '--'):
+        opt_disabled = True;
+    elif (not opt_disabled and (arg == '-t' or arg == '--top')):
+        top = len(all_patches)
+    elif (not opt_disabled and (arg == '-d' or arg == '--dst')):
+        do_dst = True
+    else:
+        path = arg
+        name = PurePath(path).name
+        out = subprocess.check_output(lsdiff_cmd + [path],
+                                      universal_newlines=True)
+        all_files = all_files + out.split()
+        all_patches.append(path)
+        all_patch_names.append(name)
+        patch_name_max_len = max(len(name), patch_name_max_len)
+
+all_files = sorted(set(all_files))
+
+#
+# Prepare src and dst.
+#
+src = os.getcwd()
+src = Path(src)
+if not src.is_dir():
+    print('Cannot access source dir', file=sys.stderr)
+    sys.exit(1)
+
+if not dstpath:
+    print('-d, --dst target directory unspecified', file=sys.stderr)
+    sys.exit(1)
+
+dst = Path(dstpath);
+if not dst.exists():
+    dst.mkdir(parents=True)
+
+if not dst.is_dir():
+    print('Destination %s is not a directory' % dstpath, file=sys.stderr)
+    sys.exit(1)
+
+for i in range(len(all_patches)):
+    Path(hier_path_str(i, 'a')).mkdir(parents=True)
+    Path(hier_path_str(i, 'b')).mkdir(parents=True)
+
+#
+# Build hierarchical a and b directories.
+#
+
+# patches which should be reverse applied
+first = True
+for i in range(top - 1, -1, -1):
+    dir_s = str(src) if first else hier_path_str(i + 1, 'a')
+    dir_a = hier_path_str(i, 'a')
+    dir_b = hier_path_str(i, 'b')
+    if not patch_dir(dir_s, dir_a, dir_b, all_patches[i], True):
+        break
+    first = False
+
+# normal ones
+first = True
+for i in range(top, len(all_patches)):
+    dir_s = str(src) if first else hier_path_str(i - 1, 'b')
+    dir_a = hier_path_str(i, 'a')
+    dir_b = hier_path_str(i, 'b')
+    if not patch_dir(dir_s, dir_a, dir_b, all_patches[i], False):
+        break
+    first = False
+
+# create empty dummies for missing files and get rid of dups
+for i in range(0, len(all_patches)):
+    dir_a = hier_path_str(i, 'a')
+    dir_b = hier_path_str(i, 'b')
+    for file in all_files:
+        path_a = Path(dir_a + '/' + file)
+        path_b = Path(dir_b + '/' + file)
+        if (not path_a.parent.exists()):
+            path_a.parent.mkdir(parents=True)
+        if (not path_b.parent.exists()):
+            path_b.parent.mkdir(parents=True)
+        path_a.touch()
+        path_b.touch()
+        if filecmp.cmp(str(path_a), str(path_b), shallow=False):
+            path_a.unlink()
+            path_b.unlink()
+
+#
+# build the flattened version
+#
+flatten_dir('a')
+flatten_dir('b')

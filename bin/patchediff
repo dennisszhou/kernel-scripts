@@ -1,0 +1,7 @@
+#!/bin/bash
+
+set -e
+DIR=$(mktemp -d /tmp/d-XXX)
+patch2dir -d $DIR "$@"
+emacs --eval "(ediff-directories \"$DIR/a\" \"$DIR/b\" \"\")"
+rm -rf $DIR

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+set -e
+DIR=$(mktemp -d /tmp/d-XXX)
+quilt2dir -d $DIR $@
+#emacs --eval "(ediff-directories \"$DIR/a\" \"$DIR/b\" \"\")"
+vim -c "set nosplitbelow" -c "set nosplitright" -c "DirDiff $DIR/a $DIR/b"
+rm -rf $DIR
