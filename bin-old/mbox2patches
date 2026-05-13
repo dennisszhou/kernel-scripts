@@ -1,0 +1,72 @@
+#!/usr/bin/python3
+
+import mailbox
+import sys
+import email
+import re
+
+def format_subject(subj):
+    out = ''
+    last_was_alnum = False
+    for c in subj:
+        if c.isalnum():
+            last_was_alnum = True
+            out += c
+        else:
+            if last_was_alnum:
+                out += '_'
+            last_was_alnum = False
+    if len(out) > 52:
+        out = out[:52]
+    return out.lower()
+
+source = mailbox.Maildir(sys.argv[-1], None, False)
+
+split_pat0 = re.compile(r'^\s*\[(?:.*?[^\d/])?\s*(?:[vV]\d*)?\s*(\d+)\s*(?:/\s*\d+)?\s*(?:[^0-9/].*)?\]\s*((?:\S.*\S)|\S)', re.I)
+split_pat1 = re.compile(r'.*PATCH\s*(\d+)\s*(?:/\s*\d+)?\s*((?:\S.*\S)|\S)', re.I)
+trim_pat = re.compile(r'^\s*(?:\[.*\])?(.*)')
+
+unknown_idx = 9000
+msg_idx = 0
+filenames = {}
+
+for src_msg in source:
+    # parse the message:
+    msg_idx += 1
+    msg = email.message_from_string(str(src_msg))
+    if not 'subject' in msg:
+        print('Message ' + str(msg_idx) + ' is missing Subject')
+        print(msg)
+        continue
+
+    subject = ' '.join(msg['subject'].splitlines())
+
+    m = split_pat0.match(subject)
+    if not m:
+        m = split_pat1.match(subject)
+
+    if m:
+        patchno = int(m.group(1))
+        subject = m.group(2)
+    else:
+        m = trim_pat.match(subject)
+        if m:
+            subject = m.group(1)
+        patchno = unknown_idx;
+        unknown_idx += 1
+
+    subject = format_subject(subject)
+
+    filename = '%04d-%s.patch' % (patchno, subject)
+    filenames['%04d' % patchno] = filename
+
+    outfile = open(filename, 'w')
+    outfile.write(str(msg))
+    outfile.close()
+
+if len(filenames) > 1:
+    seriesfile = open('series', 'w')
+    for i in sorted(filenames.keys()):
+        seriesfile.write(filenames[i] + '\n')
+    seriesfile.close()
+    print('Created patch series of %d patches' % msg_idx)

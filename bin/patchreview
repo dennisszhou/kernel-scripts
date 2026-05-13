@@ -7,9 +7,24 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 PATCH_CMD = ["patch", "-f", "-p1"]
+
+
+@dataclass(frozen=True)
+class ReviewEntry:
+    patch_index: int
+    patch_count: int
+    patch_name: str
+    rel_path: str
+    before_path: Path
+    after_path: Path
+
+    @property
+    def label(self) -> str:
+        return f"{self.patch_index:04d} {self.patch_name} {self.rel_path}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,8 +60,7 @@ def read_patch_list(patch_dir: Path, pattern: str) -> list[Path]:
             patches.append(patch_path)
         return patches
 
-    patches = sorted(path for path in patch_dir.glob(pattern) if path.is_file())
-    return patches
+    return sorted(path for path in patch_dir.glob(pattern) if path.is_file())
 
 
 def touched_files(patch_path: Path) -> list[str]:
@@ -86,109 +100,239 @@ def copy_if_exists(src_root: Path, dst_root: Path, rel_path: str) -> None:
     shutil.copyfile(src_path, dst_path)
 
 
+def write_empty_file(dst_root: Path, rel_path: str) -> None:
+    dst_path = dst_root / rel_path
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    dst_path.touch()
+
+
+def read_bytes_if_exists(root: Path, rel_path: str) -> bytes | None:
+    path = root / rel_path
+    if not path.exists():
+        return None
+    return path.read_bytes()
+
+
+def copy_materialized_path(src_root: Path, current_root: Path, dst_root: Path, rel_path: str) -> None:
+    if (current_root / rel_path).exists():
+        copy_if_exists(current_root, dst_root, rel_path)
+        return
+    copy_if_exists(src_root, dst_root, rel_path)
+
+
+def snapshot_pair(
+    src_root: Path, current_root: Path, work_root: Path, rel_path: str
+) -> tuple[bytes, bytes]:
+    before = read_bytes_if_exists(current_root, rel_path)
+    if before is None:
+        before = read_bytes_if_exists(src_root, rel_path)
+    if before is None:
+        before = b""
+
+    after = read_bytes_if_exists(work_root, rel_path)
+    if after is None:
+        after = b""
+
+    return before, after
+
+
+def write_review_snapshot(
+    primary_root: Path | None,
+    fallback_root: Path | None,
+    source_rel_path: str,
+    dst_root: Path,
+    dst_rel_path: str,
+) -> None:
+    for root in (primary_root, fallback_root):
+        if root is None:
+            continue
+        source_path = root / source_rel_path
+        if not source_path.exists():
+            continue
+        dst_path = dst_root / dst_rel_path
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, dst_path)
+        return
+
+    write_empty_file(dst_root, dst_rel_path)
+
+
+def sync_current_path(current_root: Path, work_root: Path, rel_path: str) -> None:
+    current_path = current_root / rel_path
+    work_path = work_root / rel_path
+    if work_path.exists():
+        copy_if_exists(work_root, current_root, rel_path)
+        return
+    current_path.unlink(missing_ok=True)
+
+
 def apply_patch(work_dir: Path, patch_path: Path) -> None:
     with patch_path.open("r", encoding="utf-8") as patch_file:
         subprocess.check_call(PATCH_CMD, stdin=patch_file, cwd=work_dir)
 
 
-def build_review_layout(src_root: Path, patch_paths: list[Path], temp_root: Path) -> list[str]:
+def build_review_layout(
+    src_root: Path, patch_paths: list[Path], temp_root: Path
+) -> list[ReviewEntry]:
     left_dir = temp_root / "a"
     right_dir = temp_root / "b"
     state_dir = temp_root / "state"
+    current_dir = state_dir / "current"
     left_dir.mkdir(parents=True, exist_ok=True)
     right_dir.mkdir(parents=True, exist_ok=True)
-    state_dir.mkdir(parents=True, exist_ok=True)
+    current_dir.mkdir(parents=True, exist_ok=True)
 
-    name_width = max((len(path.name) for path in patch_paths), default=0)
-    review_files: list[str] = []
-    previous_state = src_root
+    review_entries: list[ReviewEntry] = []
+    patch_count = len(patch_paths)
 
     for idx, patch_path in enumerate(patch_paths, start=1):
         files = sorted(set(touched_files(patch_path)))
-        before_dir = state_dir / f"{idx:04d}-before"
-        after_dir = state_dir / f"{idx:04d}-after"
-        before_dir.mkdir(parents=True, exist_ok=True)
-        after_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = state_dir / f"{idx:04d}-work"
+        work_dir.mkdir(parents=True, exist_ok=True)
 
         for rel_path in files:
-            copy_if_exists(previous_state, before_dir, rel_path)
-            copy_if_exists(previous_state, after_dir, rel_path)
+            copy_materialized_path(src_root, current_dir, work_dir, rel_path)
 
         try:
-            apply_patch(after_dir, patch_path)
+            apply_patch(work_dir, patch_path)
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"failed to apply patch against base tree: {patch_path}") from exc
+            raise RuntimeError(
+                f"failed to apply patch against cumulative tree: {patch_path}"
+            ) from exc
 
         for rel_path in files:
-            before_path = before_dir / rel_path
-            after_path = after_dir / rel_path
-            if not before_path.exists():
-                before_path.parent.mkdir(parents=True, exist_ok=True)
-                before_path.touch()
-            if not after_path.exists():
-                after_path.parent.mkdir(parents=True, exist_ok=True)
-                after_path.touch()
-            if before_path.read_bytes() == after_path.read_bytes():
-                continue
-
-            review_name = (
-                f"{idx:04d} {patch_path.name.ljust(name_width)} {rel_path.replace('/', ':')}"
+            before_bytes, after_bytes = snapshot_pair(
+                src_root, current_dir, work_dir, rel_path
             )
-            shutil.copyfile(before_path, left_dir / review_name)
-            shutil.copyfile(after_path, right_dir / review_name)
-            review_files.append(review_name)
 
-        previous_state = after_dir
+            if before_bytes != after_bytes:
+                review_name = f"{idx:04d} {patch_path.name} {rel_path.replace('/', ':')}"
+                write_review_snapshot(
+                    current_dir,
+                    src_root,
+                    rel_path,
+                    left_dir,
+                    review_name,
+                )
+                write_review_snapshot(
+                    work_dir,
+                    None,
+                    rel_path,
+                    right_dir,
+                    review_name,
+                )
 
-    return review_files
+                review_entries.append(
+                    ReviewEntry(
+                        patch_index=idx,
+                        patch_count=patch_count,
+                        patch_name=patch_path.name,
+                        rel_path=rel_path,
+                        before_path=left_dir / review_name,
+                        after_path=right_dir / review_name,
+                    )
+                )
+
+            sync_current_path(current_dir, work_dir, rel_path)
+
+    return review_entries
 
 
-def write_review_script(temp_root: Path, review_files: list[str]) -> Path:
+def write_review_script(temp_root: Path, review_entries: list[ReviewEntry]) -> Path:
     script_path = temp_root / "review.vim"
 
     def vim_str(value: str) -> str:
         return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
 
-    pair_entries = []
-    for name in review_files:
-        pair_entries.append(
-            "[%s, %s, %s]"
+    entry_literals = []
+    for entry in review_entries:
+        entry_literals.append(
+            "{'before': %s, 'after': %s, 'label': %s, 'patch_index': %d, 'patch_count': %d}"
             % (
-                vim_str(str(temp_root / "a" / name)),
-                vim_str(str(temp_root / "b" / name)),
-                vim_str(name.replace(":", "/")),
+                vim_str(str(entry.before_path)),
+                vim_str(str(entry.after_path)),
+                vim_str(entry.label),
+                entry.patch_index,
+                entry.patch_count,
             )
         )
 
     lines = [
         "set nosplitbelow",
-        "set nosplitright",
+        "set splitright",
         "set noswapfile",
         "set shadafile=NONE",
         "set diffopt+=linematch:60",
-        "let g:review_pairs = [%s]" % ", ".join(pair_entries),
+        "let g:review_entries = [%s]" % ", ".join(entry_literals),
         "let g:review_index = 0",
+        "let g:review_list_height = min([max([len(g:review_entries), 1]), 10])",
+        "function! ReviewBuildQuickfix() abort",
+        "  let l:items = []",
+        "  for l:idx in range(len(g:review_entries))",
+        "    let l:entry = g:review_entries[l:idx]",
+        "    call add(l:items, {'text': printf('%4d  %s', l:idx + 1, l:entry.label)})",
+        "  endfor",
+        "  call setqflist([], 'r', {'title': 'patchreview', 'items': l:items})",
+        "endfunction",
+        "function! ReviewEnsureQuickfix() abort",
+        "  let l:winid = getqflist({'winid': 0}).winid",
+        "  if l:winid == 0",
+        "    execute 'botright copen ' . g:review_list_height",
+        "    let l:winid = getqflist({'winid': 0}).winid",
+        "  endif",
+        "  if l:winid != 0",
+        "    let l:cur_winid = win_getid()",
+        "    call win_gotoid(l:winid)",
+        "    execute 'resize ' . g:review_list_height",
+        "    setlocal winfixheight",
+        "    call win_gotoid(l:cur_winid)",
+        "  endif",
+        "  return l:winid",
+        "endfunction",
+        "function! ReviewCloseContentWindows() abort",
+        "  for l:win in reverse(getwininfo())",
+        "    if l:win.tabnr != tabpagenr()",
+        "      continue",
+        "    endif",
+        "    if getbufvar(l:win.bufnr, '&buftype') ==# 'quickfix'",
+        "      continue",
+        "    endif",
+        "    call win_gotoid(l:win.winid)",
+        "    close",
+        "  endfor",
+        "endfunction",
+        "function! ReviewSelectQuickfix() abort",
+        "  call ReviewOpen(line('.') - 1)",
+        "endfunction",
+        "function! ReviewSyncQuickfix() abort",
+        "  call setqflist([], 'a', {'idx': g:review_index + 1})",
+        "endfunction",
         "function! ReviewOpen(idx) abort",
-        "  if empty(g:review_pairs)",
+        "  if empty(g:review_entries)",
         "    echo 'No review files were generated'",
         "    return",
         "  endif",
-        "  if a:idx < 0 || a:idx >= len(g:review_pairs)",
+        "  if a:idx < 0 || a:idx >= len(g:review_entries)",
         "    echo 'No more review files'",
         "    return",
         "  endif",
         "  let g:review_index = a:idx",
-        "  let l:pair = g:review_pairs[a:idx]",
-        "  silent! diffoff!",
-        "  silent! only",
-        "  execute 'edit ' . fnameescape(l:pair[0])",
+        "  let l:entry = g:review_entries[a:idx]",
+        "  call ReviewEnsureQuickfix()",
+        "  call ReviewCloseContentWindows()",
+        "  noautocmd aboveleft new",
+        "  execute 'edit ' . fnameescape(l:entry.before)",
         "  setlocal readonly nomodifiable",
         "  diffthis",
-        "  execute 'vert diffsplit ' . fnameescape(l:pair[1])",
+        "  execute 'rightbelow vert diffsplit ' . fnameescape(l:entry.after)",
         "  setlocal readonly nomodifiable",
         "  diffthis",
         "  wincmd h",
-        "  echo printf('[%d/%d] %s', g:review_index + 1, len(g:review_pairs), l:pair[2])",
+        "  let l:main_winid = win_getid()",
+        "  call ReviewEnsureQuickfix()",
+        "  call ReviewSyncQuickfix()",
+        "  call win_gotoid(l:main_winid)",
+        "  echo printf('[%d/%d] patch %d/%d %s', g:review_index + 1, len(g:review_entries), l:entry.patch_index, l:entry.patch_count, l:entry.label)",
         "endfunction",
         "function! ReviewNext() abort",
         "  call ReviewOpen(g:review_index + 1)",
@@ -196,10 +340,41 @@ def write_review_script(temp_root: Path, review_files: list[str]) -> Path:
         "function! ReviewPrev() abort",
         "  call ReviewOpen(g:review_index - 1)",
         "endfunction",
+        "function! ReviewNextPatch() abort",
+        "  let l:current_patch = g:review_entries[g:review_index].patch_index",
+        "  for l:idx in range(g:review_index + 1, len(g:review_entries) - 1)",
+        "    if g:review_entries[l:idx].patch_index != l:current_patch",
+        "      call ReviewOpen(l:idx)",
+        "      return",
+        "    endif",
+        "  endfor",
+        "  echo 'No more patches'",
+        "endfunction",
+        "function! ReviewPrevPatch() abort",
+        "  let l:current_patch = g:review_entries[g:review_index].patch_index",
+        "  for l:idx in reverse(range(0, g:review_index - 1))",
+        "    if g:review_entries[l:idx].patch_index != l:current_patch",
+        "      call ReviewOpen(l:idx)",
+        "      return",
+        "    endif",
+        "  endfor",
+        "  echo 'No earlier patches'",
+        "endfunction",
         "command! ReviewNext call ReviewNext()",
         "command! ReviewPrev call ReviewPrev()",
-        "nnoremap ]r <Cmd>ReviewNext<CR>",
-        "nnoremap [r <Cmd>ReviewPrev<CR>",
+        "command! ReviewNextPatch call ReviewNextPatch()",
+        "command! ReviewPrevPatch call ReviewPrevPatch()",
+        "command! ReviewList call ReviewEnsureQuickfix()",
+        "nnoremap <silent> ]r <Cmd>ReviewNext<CR>",
+        "nnoremap <silent> [r <Cmd>ReviewPrev<CR>",
+        "nnoremap <silent> ]p <Cmd>ReviewNextPatch<CR>",
+        "nnoremap <silent> [p <Cmd>ReviewPrevPatch<CR>",
+        "augroup PatchReview",
+        "  autocmd!",
+        "  autocmd FileType qf if getqflist({'title': 0}).title ==# 'patchreview' | nnoremap <silent><buffer> <CR> <Cmd>call ReviewSelectQuickfix()<CR> | endif",
+        "augroup END",
+        "call ReviewBuildQuickfix()",
+        "call ReviewEnsureQuickfix()",
         "call ReviewOpen(0)",
     ]
     script_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -224,8 +399,8 @@ def main() -> int:
 
     temp_root = Path(tempfile.mkdtemp(prefix="patchreview-", dir="/tmp"))
     try:
-        review_files = build_review_layout(Path.cwd(), patch_paths, temp_root)
-        script_path = write_review_script(temp_root, review_files)
+        review_entries = build_review_layout(Path.cwd(), patch_paths, temp_root)
+        script_path = write_review_script(temp_root, review_entries)
         return subprocess.call(["nvim", "-S", str(script_path), *nvim_args])
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
