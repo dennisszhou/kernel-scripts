@@ -164,6 +164,8 @@ class KernelCliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("ARCH=arm64", stdout.getvalue())
+        self.assertIn("/etc/passwd:ro", stdout.getvalue())
+        self.assertNotIn("KBUILD_BUILD_USER", stdout.getvalue())
         self.assertIn("Image", stdout.getvalue())
 
     def test_shell_dry_run_can_plan_root_shell(self) -> None:

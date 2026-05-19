@@ -160,9 +160,9 @@ the make arguments already include `ARCH=...` or a jobs argument. It does not
 generate a missing `.config`; run `kbake apply-config` or
 `kbake make defconfig` first.
 
-Kernel `make` runs inside Docker as the host UID/GID and exports
-`KBUILD_BUILD_USER` and `KBUILD_BUILD_HOST` from the host, so kernel metadata
-does not depend on the container having a passwd entry for the host UID.
+Kernel `make` runs inside Docker as the host UID/GID. `kbake` mounts a temporary
+passwd/group view for that Docker run so tools inside the container resolve the
+invoking user name instead of seeing only an unknown numeric UID.
 
 `kernel.arch` is the target architecture. `kforge config init` writes the
 normalized local host architecture, currently `arm64` or `x86_64`. The target

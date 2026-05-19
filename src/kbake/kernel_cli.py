@@ -14,6 +14,7 @@ from kbake.kernel.kbuild import (
     apply_config,
     build_make_args,
     ensure_config_exists,
+    host_identity_volumes,
     make_spec,
     normalize_remainder,
 )
@@ -121,8 +122,9 @@ def cmd_apply_config(
     runner: Runner,
 ) -> int:
     checkout = resolve_checkout(config, explicit=args.checkout)
-    spec = apply_config(config, checkout)
-    return runner.run(spec.argv()).returncode
+    with host_identity_volumes() as identity_volumes:
+        spec = apply_config(config, checkout, identity_volumes=identity_volumes)
+        return runner.run(spec.argv()).returncode
 
 
 def cmd_make(
@@ -131,13 +133,15 @@ def cmd_make(
     runner: Runner,
 ) -> int:
     checkout = resolve_checkout(config, explicit=args.checkout)
-    spec = make_spec(
-        config,
-        checkout,
-        normalize_remainder(args.make_args),
-        tty=wants_tty(),
-    )
-    return run_or_print(spec.argv(), args.dry_run, runner)
+    with host_identity_volumes() as identity_volumes:
+        spec = make_spec(
+            config,
+            checkout,
+            normalize_remainder(args.make_args),
+            identity_volumes=identity_volumes,
+            tty=wants_tty(),
+        )
+        return run_or_print(spec.argv(), args.dry_run, runner)
 
 
 def cmd_build(
@@ -147,13 +151,15 @@ def cmd_build(
 ) -> int:
     checkout = resolve_checkout(config, explicit=args.checkout)
     ensure_config_exists(checkout)
-    spec = make_spec(
-        config,
-        checkout,
-        build_make_args(config, args.make_args),
-        tty=wants_tty(),
-    )
-    return run_or_print(spec.argv(), args.dry_run, runner)
+    with host_identity_volumes() as identity_volumes:
+        spec = make_spec(
+            config,
+            checkout,
+            build_make_args(config, args.make_args),
+            identity_volumes=identity_volumes,
+            tty=wants_tty(),
+        )
+        return run_or_print(spec.argv(), args.dry_run, runner)
 
 
 def cmd_shell(
