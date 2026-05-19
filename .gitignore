@@ -1,2 +1,10 @@
 __pycache__/
 *.pyc
+.DS_Store
+.tmp/
+.venv/
+*.egg-info/
+build/
+dist/
+rootfs.img
+rootfs.cpio.gz

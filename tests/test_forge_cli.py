@@ -45,16 +45,18 @@ class ForgeCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.toml"
             config_path.write_text("[bad\n", encoding="utf-8")
+            stdout = io.StringIO()
 
-            code = main(
-                [
-                    "--config",
-                    str(config_path),
-                    "config",
-                    "init",
-                    "--force",
-                ],
-            )
+            with contextlib.redirect_stdout(stdout):
+                code = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "config",
+                        "init",
+                        "--force",
+                    ],
+                )
 
             contents = config_path.read_text(encoding="utf-8")
 
