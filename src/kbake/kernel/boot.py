@@ -34,6 +34,10 @@ def select_root(
             "initramfs",
             _selected_path(initramfs, config.images_initramfs.value),
         )
+    if config.images_rootfs.source != "default":
+        return RootArtifact("rootfs", config.images_rootfs.value)
+    if config.images_initramfs.source != "default":
+        return RootArtifact("initramfs", config.images_initramfs.value)
     return RootArtifact("rootfs", config.images_rootfs.value)
 
 

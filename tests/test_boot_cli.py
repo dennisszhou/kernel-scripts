@@ -57,6 +57,25 @@ initramfs = "{Path(tmp) / "rootfs.cpio.gz"}"
 
         self.assertEqual(root, RootArtifact("rootfs", Path(tmp) / "rootfs.img"))
 
+    def test_select_root_uses_configured_initramfs_when_rootfs_is_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                f"""
+[images]
+initramfs = "{Path(tmp) / "rootfs.cpio.gz"}"
+""",
+                encoding="utf-8",
+            )
+            config = load_config(path=config_path)
+
+            root = select_root(config, rootfs=None, initramfs=None)
+
+        self.assertEqual(
+            root,
+            RootArtifact("initramfs", Path(tmp) / "rootfs.cpio.gz"),
+        )
+
     def test_boot_plan_uses_qemu_binary_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
