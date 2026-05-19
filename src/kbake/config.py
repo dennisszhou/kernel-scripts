@@ -77,6 +77,34 @@ def config_path(path: str | Path | None) -> Path:
     return _path(path)
 
 
+def default_config_text(*, image_dir: str | Path = DEFAULT_IMAGE_DIR) -> str:
+    image_dir_path = _path(image_dir)
+    return (
+        "version = 1\n"
+        "\n"
+        "[images]\n"
+        f'dir = "{image_dir_path}"\n'
+        f'rootfs = "{image_dir_path / "rootfs.img"}"\n'
+        f'initramfs = "{image_dir_path / "rootfs.cpio.gz"}"\n'
+        "\n"
+        "[builder]\n"
+        f'image = "{DEFAULT_BUILDER_IMAGE}"\n'
+        "\n"
+        "[kernel]\n"
+        f'arch = "{DEFAULT_ARCH}"\n'
+        f'kconfig = "{DEFAULT_KCONFIG}"\n'
+        "\n"
+        "[boot]\n"
+        f'memory = "{DEFAULT_MEMORY}"\n'
+        f"cpus = {DEFAULT_CPUS}\n"
+        'append = ""\n'
+        "\n"
+        "[qemu]\n"
+        f'binary = "{DEFAULT_QEMU_BINARY}"\n'
+        'cpu = ""\n'
+    )
+
+
 def load_config(
     *,
     path: str | Path | None = None,

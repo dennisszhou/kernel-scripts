@@ -9,6 +9,9 @@ description = "Local Linux kernel build, rootfs, and QEMU boot workflow helper"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.scripts]
+kforge = "kbake.forge_cli:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
