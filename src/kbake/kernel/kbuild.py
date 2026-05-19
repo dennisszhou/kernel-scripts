@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import getpass
 import os
 import shutil
+import socket
 from pathlib import Path
 from typing import Sequence
 
@@ -51,7 +53,7 @@ def make_spec(
         command=("make", *make_args),
         platform=target_spec(checkout.arch).docker_platform,
         volumes=(DockerVolume(checkout.path, "/src"),),
-        env={"HOME": "/tmp"},
+        env=kernel_make_env(),
         user=host_user(),
         tty=tty,
     )
@@ -105,3 +107,29 @@ def _has_jobs_arg(args: Sequence[str]) -> bool:
         if arg == "-j" and index + 1 < len(args):
             return True
     return False
+
+
+def kernel_make_env(
+    *,
+    build_user: str | None = None,
+    build_host: str | None = None,
+) -> dict[str, str]:
+    return {
+        "HOME": "/tmp",
+        "KBUILD_BUILD_USER": build_user or _host_login_name(),
+        "KBUILD_BUILD_HOST": build_host or _host_name(),
+    }
+
+
+def _host_login_name() -> str:
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):
+        return str(os.getuid())
+
+
+def _host_name() -> str:
+    name = socket.gethostname()
+    if not name:
+        return "localhost"
+    return name.split(".", 1)[0]

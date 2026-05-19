@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +13,12 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kbake.config import load_config
 from kbake.kernel.checkout import KernelCheckout
-from kbake.kernel.kbuild import build_make_args, ensure_config_exists, make_spec
+from kbake.kernel.kbuild import (
+    build_make_args,
+    ensure_config_exists,
+    kernel_make_env,
+    make_spec,
+)
 
 
 def load_test_config(*, arch: str = "arm64"):
@@ -56,11 +62,30 @@ class KernelBuildTests(unittest.TestCase):
         config = load_test_config()
         checkout = KernelCheckout(Path("/linux"), "arm64")
 
-        argv = make_spec(config, checkout, ["ARCH=arm64", "olddefconfig"]).argv()
+        with (
+            mock.patch("kbake.kernel.kbuild.getpass.getuser", return_value="dennis"),
+            mock.patch(
+                "kbake.kernel.kbuild.socket.gethostname",
+                return_value="palisades.local",
+            ),
+        ):
+            argv = make_spec(config, checkout, ["ARCH=arm64", "olddefconfig"]).argv()
 
         self.assertIn(f"{os.getuid()}:{os.getgid()}", argv)
         self.assertIn("/linux:/src", argv)
+        self.assertIn("KBUILD_BUILD_USER=dennis", argv)
+        self.assertIn("KBUILD_BUILD_HOST=palisades", argv)
         self.assertEqual(argv[-3:], ("make", "ARCH=arm64", "olddefconfig"))
+
+    def test_kernel_make_env_accepts_explicit_identity(self) -> None:
+        self.assertEqual(
+            kernel_make_env(build_user="builder", build_host="worker"),
+            {
+                "HOME": "/tmp",
+                "KBUILD_BUILD_USER": "builder",
+                "KBUILD_BUILD_HOST": "worker",
+            },
+        )
 
     def test_ensure_config_exists_fails_with_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
