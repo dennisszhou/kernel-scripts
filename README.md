@@ -1,6 +1,6 @@
 # kernel-scripts
 
-Local helpers for an arm64 Linux kernel build, rootfs, and QEMU boot loop.
+Local helpers for a Linux kernel build, rootfs, and QEMU boot loop.
 
 The Python package installs two operational CLIs:
 
@@ -80,7 +80,6 @@ image = "kernel-builder"
 [kernel]
 src = "~/workplace/percpu"
 arch = "arm64"
-kconfig = "builtin:arm64-minimal"
 
 [boot]
 memory = "2G"
@@ -88,11 +87,12 @@ cpus = 4
 append = ""
 
 [qemu]
-binary = "qemu-system-aarch64"
 cpu = ""
 ```
 
 Path values may use `~`. Shell variables inside config values are not expanded.
+When `kernel.kconfig` or `qemu.binary` is omitted, each default is derived from
+`kernel.arch`.
 Show resolved values and their sources with:
 
 ```sh
@@ -120,6 +120,10 @@ kforge initramfs build --path /tmp/rootfs.cpio.gz
 `kforge rootfs build` uses privileged Docker because it formats and mounts an
 ext4 image in the container. Use `--dry-run` on Docker-backed commands to print
 the planned command without running Docker.
+
+Builder and rootfs Docker commands use `--platform` derived from
+`kernel.arch`, so generated userland matches the configured target architecture
+when Docker supports that platform.
 
 ## kbake
 
@@ -151,9 +155,25 @@ kbake build V=1
 kbake build modules
 ```
 
-`kbake build` adds the configured `ARCH` and host job count unless the make
-arguments already include `ARCH=...` or a jobs argument. It does not generate a
-missing `.config`; run `kbake apply-config` or `kbake make defconfig` first.
+`kbake build` adds the target's Linux `ARCH` value and host job count unless
+the make arguments already include `ARCH=...` or a jobs argument. It does not
+generate a missing `.config`; run `kbake apply-config` or
+`kbake make defconfig` first.
+
+`kernel.arch` is the target architecture. `kforge config init` writes the
+normalized local host architecture, currently `arm64` or `x86_64`. The target
+drives derived defaults:
+
+- `arm64`: Linux `ARCH=arm64`, kernel image `arch/arm64/boot/Image`,
+  QEMU binary `qemu-system-aarch64`, QEMU machine `virt`
+- `x86_64`: Linux `ARCH=x86`, kernel image `arch/x86/boot/bzImage`,
+  QEMU binary `qemu-system-x86_64`, QEMU machine `q35`
+
+Set `kernel.arch` in config to build and boot a different target. For example,
+setting `kernel.arch = "x86_64"` on Apple Silicon plans x86_64 Docker
+platforms and boots with `qemu-system-x86_64` under TCG emulation.
+After changing `kernel.arch`, rerun `kforge builder build` so the local builder
+image exists for the new Docker platform.
 
 Open a builder shell:
 
@@ -176,12 +196,13 @@ When no root selector is provided, configured `images.rootfs` wins over
 configured `images.initramfs`. `--rootfs` or `--initramfs` without a path uses
 the configured value for that selected root kind.
 
-`qemu.binary` defaults to `qemu-system-aarch64`, resolved by normal `PATH`
+`qemu.binary` defaults from `kernel.arch` and is resolved by normal `PATH`
 lookup. Set `qemu.binary` in config or pass `--qemu PATH` for nonstandard QEMU
 installs.
 
-On Apple Silicon, `kbake boot` uses HVF. On Linux arm64 with `/dev/kvm`, it uses
-KVM. Otherwise it falls back to TCG.
+When the target architecture matches the host, `kbake boot` uses HVF on macOS
+or KVM on Linux with `/dev/kvm`. When the target differs from the host, it falls
+back to TCG emulation.
 
 ## Tests
 

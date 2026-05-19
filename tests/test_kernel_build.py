@@ -15,9 +15,17 @@ from kbake.kernel.checkout import KernelCheckout
 from kbake.kernel.kbuild import build_make_args, ensure_config_exists, make_spec
 
 
+def load_test_config(*, arch: str = "arm64"):
+    with tempfile.TemporaryDirectory() as tmp:
+        return load_config(
+            path=Path(tmp) / "missing.toml",
+            overrides={"kernel.arch": arch},
+        )
+
+
 class KernelBuildTests(unittest.TestCase):
     def test_build_make_args_adds_arch_and_jobs_by_default(self) -> None:
-        config = load_config()
+        config = load_test_config()
 
         self.assertEqual(
             build_make_args(config, ["Image"], cpu_count=8),
@@ -25,7 +33,7 @@ class KernelBuildTests(unittest.TestCase):
         )
 
     def test_build_make_args_preserves_user_arch_and_jobs(self) -> None:
-        config = load_config()
+        config = load_test_config()
 
         self.assertEqual(
             build_make_args(config, ["ARCH=arm64", "-j16", "modules"]),
@@ -36,8 +44,16 @@ class KernelBuildTests(unittest.TestCase):
             ["ARCH=arm64", "--jobs=12", "Image"],
         )
 
+    def test_x86_target_uses_kernel_make_arch(self) -> None:
+        config = load_test_config(arch="x86_64")
+
+        self.assertEqual(
+            build_make_args(config, ["bzImage"], cpu_count=8),
+            ["ARCH=x86", "-j8", "bzImage"],
+        )
+
     def test_make_spec_runs_as_host_user_in_checkout(self) -> None:
-        config = load_config()
+        config = load_test_config()
         checkout = KernelCheckout(Path("/linux"), "arm64")
 
         argv = make_spec(config, checkout, ["ARCH=arm64", "olddefconfig"]).argv()

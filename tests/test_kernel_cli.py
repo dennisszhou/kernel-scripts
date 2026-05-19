@@ -20,9 +20,22 @@ def make_checkout(root: Path, *, with_config: bool = False) -> Path:
     (root / "Makefile").write_text("", encoding="utf-8")
     (root / "Kconfig").write_text("", encoding="utf-8")
     (root / "arch" / "arm64" / "boot").mkdir(parents=True)
+    (root / "arch" / "x86" / "boot").mkdir(parents=True)
     if with_config:
         (root / ".config").write_text("CONFIG_TEST=y\n", encoding="utf-8")
     return root
+
+
+def write_config(root: Path, *, arch: str = "arm64") -> Path:
+    path = root / "config.toml"
+    path.write_text(
+        f"""
+[kernel]
+arch = "{arch}"
+""",
+        encoding="utf-8",
+    )
+    return path
 
 
 class RecordingRunner:
@@ -46,9 +59,13 @@ class KernelCliTests(unittest.TestCase):
     def test_apply_config_copies_builtin_fragment_and_runs_olddefconfig(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp))
             runner = RecordingRunner()
 
-            code = run_cli(["-C", str(checkout), "apply-config"], runner=runner)
+            code = run_cli(
+                ["--config", str(config), "-C", str(checkout), "apply-config"],
+                runner=runner,
+            )
 
             config_text = (checkout / ".config").read_text(encoding="utf-8")
 
@@ -56,13 +73,39 @@ class KernelCliTests(unittest.TestCase):
         self.assertIn("CONFIG_ARM64=y", config_text)
         self.assertEqual(runner.commands[0][-2:], ("ARCH=arm64", "olddefconfig"))
 
-    def test_make_passes_remainder_to_kernel_make(self) -> None:
+    def test_apply_config_uses_target_arch_builtin_fragment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp), arch="x86_64")
             runner = RecordingRunner()
 
             code = run_cli(
-                ["-C", str(checkout), "make", "ARCH=arm64", "olddefconfig"],
+                ["--config", str(config), "-C", str(checkout), "apply-config"],
+                runner=runner,
+            )
+
+            config_text = (checkout / ".config").read_text(encoding="utf-8")
+
+        self.assertEqual(code, 0)
+        self.assertIn("CONFIG_X86_64=y", config_text)
+        self.assertEqual(runner.commands[0][-2:], ("ARCH=x86", "olddefconfig"))
+
+    def test_make_passes_remainder_to_kernel_make(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp))
+            runner = RecordingRunner()
+
+            code = run_cli(
+                [
+                    "--config",
+                    str(config),
+                    "-C",
+                    str(checkout),
+                    "make",
+                    "ARCH=arm64",
+                    "olddefconfig",
+                ],
                 runner=runner,
             )
 
@@ -72,11 +115,12 @@ class KernelCliTests(unittest.TestCase):
     def test_runner_error_is_reported_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp))
             stderr = io.StringIO()
 
             with contextlib.redirect_stderr(stderr):
                 code = run_cli(
-                    ["-C", str(checkout), "make"],
+                    ["--config", str(config), "-C", str(checkout), "make"],
                     runner=MissingRunner(),
                 )
 
@@ -86,11 +130,12 @@ class KernelCliTests(unittest.TestCase):
     def test_build_dry_run_requires_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp))
             stderr = io.StringIO()
 
             with contextlib.redirect_stderr(stderr):
                 code = run_cli(
-                    ["-C", str(checkout), "build", "--dry-run"],
+                    ["--config", str(config), "-C", str(checkout), "build", "--dry-run"],
                     runner=RecordingRunner(),
                 )
 
@@ -100,11 +145,20 @@ class KernelCliTests(unittest.TestCase):
     def test_build_dry_run_adds_default_arch_and_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux", with_config=True)
+            config = write_config(Path(tmp))
             stdout = io.StringIO()
 
             with contextlib.redirect_stdout(stdout):
                 code = run_cli(
-                    ["-C", str(checkout), "build", "--dry-run", "Image"],
+                    [
+                        "--config",
+                        str(config),
+                        "-C",
+                        str(checkout),
+                        "build",
+                        "--dry-run",
+                        "Image",
+                    ],
                     runner=RecordingRunner(),
                 )
 
@@ -115,11 +169,20 @@ class KernelCliTests(unittest.TestCase):
     def test_shell_dry_run_can_plan_root_shell(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp))
             stdout = io.StringIO()
 
             with contextlib.redirect_stdout(stdout):
                 code = run_cli(
-                    ["-C", str(checkout), "shell", "--root", "--dry-run"],
+                    [
+                        "--config",
+                        str(config),
+                        "-C",
+                        str(checkout),
+                        "shell",
+                        "--root",
+                        "--dry-run",
+                    ],
                     runner=RecordingRunner(),
                 )
 

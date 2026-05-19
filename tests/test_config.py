@@ -12,6 +12,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kbake.config import ConfigError, load_config
+from kbake.target import (
+    TargetError,
+    default_builtin_kconfig,
+    default_qemu_binary,
+    host_target_arch,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -25,7 +31,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.builder_image.value, "kernel-builder")
         self.assertEqual(config.builder_image.source, "default")
         self.assertEqual(config.kernel_src.value, None)
-        self.assertEqual(config.qemu_binary.value, "qemu-system-aarch64")
+        self.assertEqual(config.kernel_arch.value, host_target_arch())
+        self.assertEqual(
+            config.kernel_kconfig.value,
+            default_builtin_kconfig(config.kernel_arch.value),
+        )
+        self.assertEqual(
+            config.qemu_binary.value,
+            default_qemu_binary(config.kernel_arch.value),
+        )
 
     def test_config_values_and_origins_are_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -66,6 +80,67 @@ binary = "/opt/qemu/bin/qemu-system-aarch64"
             config.qemu_binary.value,
             "/opt/qemu/bin/qemu-system-aarch64",
         )
+
+    def test_target_arch_derives_qemu_and_kconfig_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                """
+[kernel]
+arch = "x86_64"
+""",
+                encoding="utf-8",
+            )
+
+            config = load_config(path=config_path)
+
+        self.assertEqual(config.kernel_arch.value, "x86_64")
+        self.assertEqual(config.kernel_kconfig.value, "builtin:x86_64-minimal")
+        self.assertEqual(config.qemu_binary.value, "qemu-system-x86_64")
+
+    def test_explicit_target_arch_does_not_require_supported_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                """
+[kernel]
+arch = "x86_64"
+""",
+                encoding="utf-8",
+            )
+
+            with mock.patch(
+                "kbake.config.host_target_arch",
+                side_effect=TargetError("unsupported target architecture: riscv64"),
+            ):
+                config = load_config(path=config_path)
+
+        self.assertEqual(config.kernel_arch.value, "x86_64")
+
+    def test_missing_target_arch_fails_on_unsupported_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch(
+                "kbake.config.host_target_arch",
+                side_effect=TargetError("unsupported target architecture: riscv64"),
+            ):
+                with self.assertRaisesRegex(ConfigError, "set kernel.arch"):
+                    load_config(path=Path(tmp) / "missing.toml")
+
+    def test_target_arch_aliases_are_normalized(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                """
+[kernel]
+arch = "aarch64"
+""",
+                encoding="utf-8",
+            )
+
+            config = load_config(path=config_path)
+
+        self.assertEqual(config.kernel_arch.value, "arm64")
+        self.assertEqual(config.qemu_binary.value, "qemu-system-aarch64")
 
     def test_cli_overrides_win_over_config_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,6 +203,20 @@ cpus = 0
             )
 
             with self.assertRaisesRegex(ConfigError, "boot.cpus"):
+                load_config(path=config_path)
+
+    def test_unknown_target_arch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                """
+[kernel]
+arch = "mips"
+""",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ConfigError, "unsupported target"):
                 load_config(path=config_path)
 
 

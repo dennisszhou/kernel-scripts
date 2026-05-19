@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kbake.config import Config
+from kbake.target import target_spec
 
 
 class CheckoutError(ValueError):
@@ -21,7 +22,7 @@ class KernelCheckout:
 
     @property
     def image_path(self) -> Path:
-        return self.path / "arch" / self.arch / "boot" / "Image"
+        return target_spec(self.arch).kernel_image_path(self.path)
 
 
 def is_linux_checkout(path: Path) -> bool:

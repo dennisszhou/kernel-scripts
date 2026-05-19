@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 from kbake.runner import Arg, format_command
+from kbake.target import normalize_target_arch, target_spec
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class RootArtifact:
 @dataclass(frozen=True)
 class QemuPlan:
     binary: str
+    target_arch: str
     kernel: Path
     root: RootArtifact
     accel: AccelPlan
@@ -31,10 +33,11 @@ class QemuPlan:
     append: str
 
     def argv(self) -> tuple[Arg, ...]:
+        target = target_spec(self.target_arch)
         args: list[Arg] = [
             self.binary,
             "-M",
-            "virt",
+            target.qemu_machine,
             "-cpu",
             self.accel.cpu,
             *self.accel.args,
@@ -67,23 +70,31 @@ def detect_accel(
     system: str,
     machine: str,
     has_kvm: bool,
+    target_arch: str,
     qemu_cpu: str,
 ) -> AccelPlan:
+    target = target_spec(target_arch)
+    host_arch = _normalize_host_arch(machine)
+    can_accelerate = host_arch == target.arch
+
     if system == "Darwin":
-        if machine == "arm64":
+        if can_accelerate:
             return AccelPlan(("-accel", "hvf"), qemu_cpu or "host", "hvf")
-        return AccelPlan(("-accel", "tcg"), qemu_cpu or "cortex-a72", "tcg")
+        return AccelPlan(("-accel", "tcg"), qemu_cpu or target.tcg_cpu, "tcg")
 
     if system == "Linux":
-        if has_kvm and machine in {"aarch64", "arm64"}:
+        if has_kvm and can_accelerate:
             return AccelPlan(("-accel", "kvm"), qemu_cpu or "host", "kvm")
-        return AccelPlan(("-accel", "tcg"), qemu_cpu or "cortex-a72", "tcg")
+        return AccelPlan(("-accel", "tcg"), qemu_cpu or target.tcg_cpu, "tcg")
 
-    return AccelPlan(("-accel", "tcg"), qemu_cpu or "cortex-a72", "tcg")
+    return AccelPlan(("-accel", "tcg"), qemu_cpu or target.tcg_cpu, "tcg")
 
 
-def append_string(root: RootArtifact, extra: str) -> str:
-    parts = ["console=ttyAMA0", "earlycon=pl011,0x09000000"]
+def append_string(root: RootArtifact, extra: str, *, target_arch: str) -> str:
+    target = target_spec(target_arch)
+    parts = [f"console={target.serial_console}"]
+    if target.earlycon:
+        parts.append(f"earlycon={target.earlycon}")
     if root.kind == "rootfs":
         parts.extend(["root=/dev/vda", "rw"])
     parts.append("panic=1")
@@ -96,3 +107,10 @@ def require_existing(paths: Sequence[tuple[str, Path]]) -> None:
     for label, path in paths:
         if not path.is_file():
             raise FileNotFoundError(f"{label} not found: {path}")
+
+
+def _normalize_host_arch(machine: str) -> str:
+    try:
+        return normalize_target_arch(machine)
+    except ValueError:
+        return machine

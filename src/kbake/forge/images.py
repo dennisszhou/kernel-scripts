@@ -5,6 +5,7 @@ from pathlib import Path
 
 from kbake.config import Config
 from kbake.docker import DockerRunSpec, DockerVolume, host_user
+from kbake.target import target_spec
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ def rootfs_image_spec(
     return DockerRunSpec(
         image=config.builder_image.value,
         command=("bash", "/tmp/build-rootfs-image.sh"),
+        platform=target_spec(config.kernel_arch.value).docker_platform,
         volumes=(
             DockerVolume(output.directory, "/out"),
             DockerVolume(script, "/tmp/build-rootfs-image.sh", read_only=True),
@@ -60,6 +62,7 @@ def initramfs_spec(
     return DockerRunSpec(
         image=config.builder_image.value,
         command=("bash", "/tmp/build-rootfs-initramfs.sh"),
+        platform=target_spec(config.kernel_arch.value).docker_platform,
         volumes=(
             DockerVolume(output.directory, "/out"),
             DockerVolume(script, "/tmp/build-rootfs-initramfs.sh", read_only=True),

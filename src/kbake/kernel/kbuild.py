@@ -8,7 +8,8 @@ from typing import Sequence
 from kbake.config import Config
 from kbake.docker import DockerRunSpec, DockerVolume, host_user
 from kbake.kernel.checkout import KernelCheckout
-from kbake.paths import ARM64_KCONFIG, ProjectPaths
+from kbake.paths import ProjectPaths
+from kbake.target import builtin_kconfig_asset, target_spec
 
 
 class KbuildError(ValueError):
@@ -28,9 +29,10 @@ def build_make_args(
     cpu_count: int | None = None,
 ) -> list[str]:
     args = normalize_remainder(user_args)
+    target = target_spec(config.kernel_arch.value)
     planned: list[str] = []
     if not any(arg.startswith("ARCH=") for arg in args):
-        planned.append(f"ARCH={config.kernel_arch.value}")
+        planned.append(f"ARCH={target.make_arch}")
     if not _has_jobs_arg(args):
         planned.append(f"-j{cpu_count or os.cpu_count() or 4}")
     planned.extend(args)
@@ -47,6 +49,7 @@ def make_spec(
     return DockerRunSpec(
         image=config.builder_image.value,
         command=("make", *make_args),
+        platform=target_spec(checkout.arch).docker_platform,
         volumes=(DockerVolume(checkout.path, "/src"),),
         env={"HOME": "/tmp"},
         user=host_user(),
@@ -69,7 +72,8 @@ def apply_config(
     project_paths: ProjectPaths | None = None,
 ) -> DockerRunSpec:
     copy_kconfig_fragment(config, checkout.config_path, project_paths or ProjectPaths())
-    return make_spec(config, checkout, [f"ARCH={checkout.arch}", "olddefconfig"])
+    target = target_spec(checkout.arch)
+    return make_spec(config, checkout, [f"ARCH={target.make_arch}", "olddefconfig"])
 
 
 def copy_kconfig_fragment(
@@ -78,8 +82,9 @@ def copy_kconfig_fragment(
     project_paths: ProjectPaths,
 ) -> None:
     value = config.kernel_kconfig.value
-    if value == "builtin:arm64-minimal":
-        with project_paths.resource(ARM64_KCONFIG).open("rb") as source:
+    asset = builtin_kconfig_asset(value)
+    if asset is not None:
+        with project_paths.resource(asset).open("rb") as source:
             with target.open("wb") as output:
                 shutil.copyfileobj(source, output)
             return

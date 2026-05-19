@@ -5,17 +5,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generic, Mapping, TypeVar
 
+from kbake.target import (
+    TargetError,
+    default_builtin_kconfig,
+    default_qemu_binary,
+    host_target_arch,
+    normalize_target_arch,
+)
+
 
 T = TypeVar("T")
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "kernel-workflow" / "config.toml"
 DEFAULT_IMAGE_DIR = Path.home() / "workplace-imgs" / "kernel"
 DEFAULT_BUILDER_IMAGE = "kernel-builder"
-DEFAULT_ARCH = "arm64"
-DEFAULT_KCONFIG = "builtin:arm64-minimal"
 DEFAULT_MEMORY = "2G"
 DEFAULT_CPUS = 4
-DEFAULT_QEMU_BINARY = "qemu-system-aarch64"
 
 _SCHEMA: dict[str, set[str]] = {
     "images": {"dir", "rootfs", "initramfs"},
@@ -77,8 +82,13 @@ def config_path(path: str | Path | None) -> Path:
     return _path(path)
 
 
-def default_config_text(*, image_dir: str | Path = DEFAULT_IMAGE_DIR) -> str:
+def default_config_text(
+    *,
+    image_dir: str | Path = DEFAULT_IMAGE_DIR,
+    target_arch: str | None = None,
+) -> str:
     image_dir_path = _path(image_dir)
+    arch = _normalize_arch(target_arch or _default_host_arch())
     return (
         "version = 1\n"
         "\n"
@@ -91,8 +101,7 @@ def default_config_text(*, image_dir: str | Path = DEFAULT_IMAGE_DIR) -> str:
         f'image = "{DEFAULT_BUILDER_IMAGE}"\n'
         "\n"
         "[kernel]\n"
-        f'arch = "{DEFAULT_ARCH}"\n'
-        f'kconfig = "{DEFAULT_KCONFIG}"\n'
+        f'arch = "{arch}"\n'
         "\n"
         "[boot]\n"
         f'memory = "{DEFAULT_MEMORY}"\n'
@@ -100,7 +109,6 @@ def default_config_text(*, image_dir: str | Path = DEFAULT_IMAGE_DIR) -> str:
         'append = ""\n'
         "\n"
         "[qemu]\n"
-        f'binary = "{DEFAULT_QEMU_BINARY}"\n'
         'cpu = ""\n'
     )
 
@@ -133,6 +141,13 @@ def load_config(
         images_dir.value / "rootfs.cpio.gz",
     )
 
+    kernel_arch = _resolved_arch(
+        "kernel.arch",
+        config_values,
+        override_values,
+        None,
+    )
+
     return Config(
         config_path=selected_path,
         images_dir=images_dir,
@@ -150,17 +165,12 @@ def load_config(
             override_values,
             None,
         ),
-        kernel_arch=_resolved_string(
-            "kernel.arch",
-            config_values,
-            override_values,
-            DEFAULT_ARCH,
-        ),
+        kernel_arch=kernel_arch,
         kernel_kconfig=_resolved_string(
             "kernel.kconfig",
             config_values,
             override_values,
-            DEFAULT_KCONFIG,
+            default_builtin_kconfig(kernel_arch.value),
         ),
         boot_kernel_image=_resolved_optional_path(
             "boot.kernel_image",
@@ -190,7 +200,7 @@ def load_config(
             "qemu.binary",
             config_values,
             override_values,
-            DEFAULT_QEMU_BINARY,
+            default_qemu_binary(kernel_arch.value),
         ),
         qemu_cpu=_resolved_string(
             "qemu.cpu",
@@ -253,6 +263,36 @@ def _resolved_string(
     if not isinstance(value, str):
         raise ConfigError(f"config key {key} must be a string")
     return ResolvedValue(value, source)
+
+
+def _resolved_arch(
+    key: str,
+    config_values: Mapping[str, object],
+    overrides: Mapping[str, object | None],
+    default: str | None,
+) -> ResolvedValue[str]:
+    value, source = _select(key, config_values, overrides, default)
+    if value is None:
+        return ResolvedValue(_default_host_arch(), source)
+    if not isinstance(value, str):
+        raise ConfigError(f"config key {key} must be a string")
+    return ResolvedValue(_normalize_arch(value), source)
+
+
+def _normalize_arch(value: str) -> str:
+    try:
+        return normalize_target_arch(value)
+    except TargetError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def _default_host_arch() -> str:
+    try:
+        return host_target_arch()
+    except TargetError as exc:
+        raise ConfigError(
+            f"unsupported local host architecture: {exc}; set kernel.arch"
+        ) from exc
 
 
 def _resolved_path(

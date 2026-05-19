@@ -10,7 +10,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kbake.config import load_config
-from kbake.kernel.checkout import CheckoutError, is_linux_checkout, resolve_checkout
+from kbake.kernel.checkout import (
+    CheckoutError,
+    KernelCheckout,
+    is_linux_checkout,
+    resolve_checkout,
+)
 
 
 def make_checkout(root: Path) -> Path:
@@ -27,6 +32,11 @@ class KernelCheckoutTests(unittest.TestCase):
             checkout = make_checkout(Path(tmp) / "linux")
 
             self.assertTrue(is_linux_checkout(checkout))
+
+    def test_x86_kernel_image_path_uses_linux_arch_directory(self) -> None:
+        checkout = KernelCheckout(Path("/linux"), "x86_64")
+
+        self.assertEqual(checkout.image_path, Path("/linux/arch/x86/boot/bzImage"))
 
     def test_resolves_explicit_before_current_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -95,7 +95,7 @@ fi
 
 echo
 echo "============================================"
-echo "  Minimal arm64 disk image booted OK"
+echo "  Minimal disk image booted OK"
 echo "  Kernel: $(uname -sr)"
 echo "  Machine: $(uname -m)"
 echo "  $(date)"

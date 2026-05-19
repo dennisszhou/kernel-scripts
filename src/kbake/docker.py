@@ -25,17 +25,14 @@ class DockerBuildSpec:
     image: str
     dockerfile: Path
     context: Path
+    platform: str = ""
 
     def argv(self) -> tuple[Arg, ...]:
-        return (
-            "docker",
-            "build",
-            "-t",
-            self.image,
-            "-f",
-            self.dockerfile,
-            self.context,
-        )
+        args: list[Arg] = ["docker", "build"]
+        if self.platform:
+            args.extend(["--platform", self.platform])
+        args.extend(["-t", self.image, "-f", self.dockerfile, self.context])
+        return tuple(args)
 
     def shell_command(self) -> str:
         return format_command(self.argv())
@@ -45,6 +42,7 @@ class DockerBuildSpec:
 class DockerRunSpec:
     image: str
     command: tuple[str, ...]
+    platform: str = ""
     volumes: tuple[DockerVolume, ...] = ()
     env: Mapping[str, str] = field(default_factory=dict)
     privileged: bool = False
@@ -53,6 +51,8 @@ class DockerRunSpec:
 
     def argv(self) -> tuple[Arg, ...]:
         args: list[Arg] = ["docker", "run", "--rm"]
+        if self.platform:
+            args.extend(["--platform", self.platform])
         if self.tty:
             args.extend(["-it"])
         if self.privileged:

@@ -33,6 +33,17 @@ class DockerSpecTests(unittest.TestCase):
             ),
         )
 
+    def test_build_spec_formats_platform_when_set(self) -> None:
+        spec = DockerBuildSpec(
+            image="kernel-builder",
+            dockerfile=Path("/tmp/kernel-builder.Dockerfile"),
+            context=Path("/tmp/context"),
+            platform="linux/amd64",
+        )
+
+        self.assertIn("--platform", spec.argv())
+        self.assertIn("linux/amd64", spec.argv())
+
     def test_run_spec_formats_privileged_volume_and_env(self) -> None:
         spec = DockerRunSpec(
             image="kernel-builder",
@@ -55,6 +66,18 @@ class DockerSpecTests(unittest.TestCase):
         self.assertIn("/script.sh:/tmp/build.sh:ro", argv)
         self.assertIn("HOME=/tmp", argv)
         self.assertIn("ROOTFS_IMAGE_NAME=rootfs.img", argv)
+
+    def test_run_spec_formats_platform_when_set(self) -> None:
+        spec = DockerRunSpec(
+            image="kernel-builder",
+            command=("make",),
+            platform="linux/arm64",
+        )
+
+        self.assertEqual(
+            spec.argv()[:5],
+            ("docker", "run", "--rm", "--platform", "linux/arm64"),
+        )
 
     def test_host_user_uses_process_ids(self) -> None:
         self.assertEqual(host_user(), f"{os.getuid()}:{os.getgid()}")

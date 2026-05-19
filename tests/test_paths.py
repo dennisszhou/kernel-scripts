@@ -15,6 +15,7 @@ from kbake.paths import (
     ProjectPaths,
     ROOTFS_IMAGE_SCRIPT,
     ROOTFS_INITRAMFS_SCRIPT,
+    X86_64_KCONFIG,
 )
 
 
@@ -24,6 +25,7 @@ class ProjectPathsTests(unittest.TestCase):
 
         self.assertIn("FROM fedora", paths.read_text(BUILDER_DOCKERFILE))
         self.assertIn("CONFIG_ARM64=y", paths.read_text(ARM64_KCONFIG))
+        self.assertIn("CONFIG_X86_64=y", paths.read_text(X86_64_KCONFIG))
         self.assertIn("ROOTFS_IMAGE_NAME", paths.read_text(ROOTFS_IMAGE_SCRIPT))
         self.assertIn(
             "ROOTFS_INITRAMFS_NAME",

@@ -25,7 +25,22 @@ def make_checkout(root: Path) -> Path:
     (root / "Kconfig").write_text("", encoding="utf-8")
     (root / "arch" / "arm64" / "boot").mkdir(parents=True)
     (root / "arch" / "arm64" / "boot" / "Image").write_text("", encoding="utf-8")
+    (root / "arch" / "x86" / "boot").mkdir(parents=True)
+    (root / "arch" / "x86" / "boot" / "bzImage").write_text("", encoding="utf-8")
     return root
+
+
+def write_config(root: Path, *, extra: str = "") -> Path:
+    config = root / "config.toml"
+    config.write_text(
+        f"""
+[kernel]
+arch = "arm64"
+{extra}
+""",
+        encoding="utf-8",
+    )
+    return config
 
 
 class RecordingRunner:
@@ -84,6 +99,9 @@ initramfs = "{Path(tmp) / "rootfs.cpio.gz"}"
             config_path = Path(tmp) / "config.toml"
             config_path.write_text(
                 f"""
+[kernel]
+arch = "arm64"
+
 [images]
 rootfs = "{rootfs}"
 
@@ -107,9 +125,43 @@ binary = "custom-qemu"
         self.assertEqual(plan.binary, "custom-qemu")
         self.assertEqual(plan.argv()[0], "custom-qemu")
 
+    def test_boot_plan_uses_target_arch_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = make_checkout(Path(tmp) / "linux")
+            rootfs = Path(tmp) / "rootfs.img"
+            rootfs.write_text("", encoding="utf-8")
+            config_path = Path(tmp) / "config.toml"
+            config_path.write_text(
+                f"""
+[kernel]
+arch = "x86_64"
+
+[images]
+rootfs = "{rootfs}"
+""",
+                encoding="utf-8",
+            )
+            config = load_config(path=config_path)
+
+            plan = boot_plan(
+                config,
+                KernelCheckout(checkout, "x86_64"),
+                rootfs=None,
+                initramfs=None,
+                system="Darwin",
+                machine="arm64",
+                has_kvm=False,
+            )
+
+        self.assertEqual(plan.binary, "qemu-system-x86_64")
+        self.assertEqual(plan.kernel, checkout / "arch" / "x86" / "boot" / "bzImage")
+        self.assertIn("console=ttyS0", plan.append)
+        self.assertIn("qemu64", plan.argv())
+
     def test_boot_dry_run_prints_qemu_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp))
             rootfs = Path(tmp) / "rootfs.img"
             rootfs.write_text("", encoding="utf-8")
             stdout = io.StringIO()
@@ -117,6 +169,8 @@ binary = "custom-qemu"
             with contextlib.redirect_stdout(stdout):
                 code = run_cli(
                     [
+                        "--config",
+                        str(config),
                         "-C",
                         str(checkout),
                         "boot",
@@ -136,12 +190,21 @@ binary = "custom-qemu"
     def test_boot_fails_when_selected_root_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = make_checkout(Path(tmp) / "linux")
+            config = write_config(Path(tmp))
             missing = Path(tmp) / "missing.img"
             stderr = io.StringIO()
 
             with contextlib.redirect_stderr(stderr):
                 code = run_cli(
-                    ["-C", str(checkout), "boot", "--rootfs", str(missing)],
+                    [
+                        "--config",
+                        str(config),
+                        "-C",
+                        str(checkout),
+                        "boot",
+                        "--rootfs",
+                        str(missing),
+                    ],
                     runner=RecordingRunner(),
                 )
 

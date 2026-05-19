@@ -44,7 +44,7 @@ ip link set lo up 2>/dev/null || true
 
 echo
 echo "============================================"
-echo "  Minimal arm64 initramfs booted OK"
+echo "  Minimal initramfs booted OK"
 echo "  Kernel: $(uname -sr)"
 echo "  Machine: $(uname -m)"
 echo "  $(date)"

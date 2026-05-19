@@ -10,12 +10,14 @@ from pathlib import Path
 ASSET_PACKAGE = "kbake.assets"
 BUILDER_DOCKERFILE = "kernel-builder.Dockerfile"
 ARM64_KCONFIG = "kconfig.arm64.minimal"
+X86_64_KCONFIG = "kconfig.x86_64.minimal"
 ROOTFS_IMAGE_SCRIPT = "rootfs-image.sh"
 ROOTFS_INITRAMFS_SCRIPT = "rootfs-initramfs.sh"
 
 _ASSET_NAMES = {
     BUILDER_DOCKERFILE,
     ARM64_KCONFIG,
+    X86_64_KCONFIG,
     ROOTFS_IMAGE_SCRIPT,
     ROOTFS_INITRAMFS_SCRIPT,
 }

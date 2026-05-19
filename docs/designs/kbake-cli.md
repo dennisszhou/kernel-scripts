@@ -2,7 +2,7 @@
 
 Date: 2026-05-19
 
-Status: approved
+Status: approved; amended 2026-05-19 for target-architecture defaults
 
 ## Problem
 
@@ -34,7 +34,9 @@ obvious owner.
 ## Constraints
 
 - The tool must work on macOS Apple Silicon and Linux where practical.
-- The main local boot target is arm64 QEMU.
+- The default boot target follows the normalized local host architecture.
+  Supported targets are `arm64` and `x86_64`; the target can be changed in
+  config to cross-build and QEMU-emulate another supported architecture.
 - Docker remains the builder and rootfs construction boundary.
 - The default config path is
   `~/.config/kernel-workflow/config.toml`.
@@ -57,8 +59,8 @@ obvious owner.
 - Do not make Makefile targets a second workflow surface.
 - Do not implement a general kernel test harness, benchmark runner, or VM
   lifecycle manager.
-- Do not solve cross-architecture kernel builds beyond preserving explicit
-  `ARCH=...` and pass-through make arguments.
+- Do not implement a general cross-architecture matrix. The first cleaned-up
+  version only supports target-aware defaults for `arm64` and `x86_64`.
 - Do not expose rootfs image sizing until there is real pressure.
 
 ## End State
@@ -140,8 +142,8 @@ kbake build ARCH=arm64 -j8 Image
 ```
 
 When no user-provided `ARCH=...` or `-j...` argument is present, `kbake build`
-adds the configured default architecture and default job count. User-provided
-make arguments win by presence; `kbake` does not expose separate `--arch` or
+adds the target's Linux `ARCH` value and default job count. User-provided make
+arguments win by presence; `kbake` does not expose separate `--arch` or
 `--jobs` flags for build.
 
 `kbake build` does not apply or regenerate `.config` automatically. If
@@ -167,6 +169,16 @@ kind and fails if the selected config value is empty. When no selector is
 provided, configured `images.rootfs` takes precedence over configured
 `images.initramfs`; if only one is configured, that one is used.
 
+`kernel.arch` is the canonical target architecture, not necessarily the exact
+value passed to kernel `make`. For `arm64`, the Linux make arch is `arm64`; for
+`x86_64`, the Linux make arch is `x86`. The target also drives the derived
+kernel image path, Docker platform, default builtin kconfig, QEMU binary, QEMU
+machine, serial console, and TCG CPU. `kforge config init` writes the local host
+architecture as the initial target; users can edit `kernel.arch` to build and
+boot another supported target under emulation. After changing `kernel.arch`,
+the local builder image should be rebuilt so the tag exists for the new Docker
+platform.
+
 ## Data Model / API Shape
 
 `Config`
@@ -182,9 +194,15 @@ provided, configured `images.rootfs` takes precedence over configured
     fragments, packaged rootfs scripts, and source-tree launchers.
 
 `KernelCheckout`
-:   A resolved Linux source tree plus architecture, `.config` path, and derived
-    image path. `kbake` commands must resolve exactly one checkout before
-    planning Docker or QEMU work.
+:   A resolved Linux source tree plus target architecture, `.config` path, and
+    derived image path. `kbake` commands must resolve exactly one checkout
+    before planning Docker or QEMU work.
+
+`TargetSpec`
+:   The supported target architecture contract. It maps a canonical target
+    such as `arm64` or `x86_64` to the Linux `ARCH` value, kernel image path,
+    Docker platform, builtin kconfig asset, QEMU binary, QEMU machine, serial
+    console, and fallback TCG CPU.
 
 `BuilderImage`
 :   Docker image tag and Dockerfile path. It is shared by `kforge builder` and
@@ -195,8 +213,9 @@ provided, configured `images.rootfs` takes precedence over configured
     filename. `kforge` creates these artifacts; `kbake boot` consumes them.
 
 `DockerRunSpec`
-:   A testable command plan for Docker invocations. Command modules build a
-    spec; a runner executes it.
+:   A testable command plan for Docker invocations, including the target
+    platform when the command produces or consumes target-architecture
+    artifacts. Command modules build a spec; a runner executes it.
 
 `QemuPlan`
 :   A testable command plan for accelerator choice, CPU model, kernel image,
@@ -222,6 +241,7 @@ src/kbake/__init__.py
 src/kbake/forge_cli.py
 src/kbake/kernel_cli.py
 src/kbake/config.py
+src/kbake/target.py
 src/kbake/paths.py
 src/kbake/runner.py
 src/kbake/docker.py
@@ -236,6 +256,7 @@ src/kbake/kernel/shell.py
 src/kbake/kernel/boot.py
 src/kbake/assets/kernel-builder.Dockerfile
 src/kbake/assets/kconfig.arm64.minimal
+src/kbake/assets/kconfig.x86_64.minimal
 src/kbake/assets/rootfs-image.sh
 src/kbake/assets/rootfs-initramfs.sh
 tests/
@@ -246,6 +267,7 @@ Ownership:
 - `forge_cli.py` owns parser construction and dispatch for `kforge` only.
 - `kernel_cli.py` owns parser construction and dispatch for `kbake` only.
 - `config.py` owns config parsing, precedence, and resolved defaults.
+- `target.py` owns supported target architectures and derived defaults.
 - `paths.py` owns repository path discovery and common path helpers.
 - `runner.py` owns subprocess execution and dry-run plumbing.
 - `docker.py` owns reusable Docker command planning.
@@ -274,6 +296,9 @@ temporary build context and passes that path to Docker. This keeps
 The Docker build context contains only the packaged builder assets needed for
 the image build. The rootfs shell payloads are mounted into containers as
 read-only files when `kforge rootfs build` or `kforge initramfs build` runs.
+Docker build and run plans include the platform derived from `kernel.arch` so
+the builder, kernel build, rootfs, and initramfs userland follow the same
+target architecture when Docker can provide that platform.
 
 ## Config File Format
 
@@ -318,7 +343,6 @@ image = "kernel-builder"
 [kernel]
 src = "~/workplace/percpu"
 arch = "arm64"
-kconfig = "builtin:arm64-minimal"
 
 [boot]
 kernel_image = ""
@@ -327,7 +351,6 @@ cpus = 4
 append = ""
 
 [qemu]
-binary = "qemu-system-aarch64"
 cpu = ""
 ```
 
@@ -339,13 +362,14 @@ Recognized tables and keys:
 - `builder.image`: Docker image tag used by `kforge` and `kbake`
 - `kernel.src`: optional default checkout for `kbake`; used after `-C` and
   current-directory checkout detection
-- `kernel.arch`: default kernel architecture for `apply-config` and `build`
-- `kernel.kconfig`: config fragment path or builtin fragment name
+- `kernel.arch`: target architecture for builder/rootfs, kernel, and QEMU
+- `kernel.kconfig`: config fragment path or builtin fragment name; omitted
+  values default from `kernel.arch`
 - `boot.kernel_image`: explicit kernel image path for `kbake boot`
 - `boot.memory`, `boot.cpus`, `boot.append`: boot defaults
 - `qemu.binary`, `qemu.cpu`: QEMU defaults. `qemu.binary` may be an
-  executable name or an explicit path; the default is `qemu-system-aarch64`,
-  resolved by normal `PATH` lookup at execution time.
+  executable name or an explicit path; omitted values default from
+  `kernel.arch` and are resolved by normal `PATH` lookup at execution time.
 
 Config path precedence is:
 
@@ -370,6 +394,9 @@ from a command-line option, config file, or default.
 - Kernel commands resolve exactly one checkout through `-C`, current working
   directory detection, or configured `kernel.src` before planning Docker or
   QEMU work.
+- `kernel.arch` is the single target-architecture source of truth for derived
+  defaults unless a narrower config key or CLI option explicitly overrides that
+  derived value.
 - Commands that create rootfs artifacts write to `images.dir` unless an explicit
   output path or directory is provided.
 - Boot chooses exactly one root source: disk image or initramfs. Command-line
@@ -385,11 +412,11 @@ from a command-line option, config file, or default.
 ## Operational Contracts
 
 - `kforge builder build` builds the local Docker builder image from the tracked
-  Dockerfile.
+  Dockerfile for the configured target platform.
 - `kforge rootfs build` may require privileged Docker because it formats and
-  mounts an ext4 image inside the container.
+  mounts an ext4 image inside the target-platform container.
 - `kforge initramfs build` creates a disposable initramfs artifact without
-  privileged Docker.
+  privileged Docker for the configured target platform.
 - `kbake make`, `kbake build`, and `kbake apply-config` run Docker as the host
   UID/GID so kernel build artifacts are not root-owned.
 - `kbake shell` opens an interactive Docker shell mounted on the resolved

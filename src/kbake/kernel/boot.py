@@ -58,16 +58,22 @@ def boot_plan(
         system=system or platform.system(),
         machine=machine or platform.machine(),
         has_kvm=Path("/dev/kvm").exists() if has_kvm is None else has_kvm,
+        target_arch=config.kernel_arch.value,
         qemu_cpu=config.qemu_cpu.value,
     )
     return QemuPlan(
         binary=config.qemu_binary.value,
+        target_arch=config.kernel_arch.value,
         kernel=kernel,
         root=root,
         accel=accel,
         memory=config.boot_memory.value,
         cpus=config.boot_cpus.value,
-        append=append_string(root, config.boot_append.value),
+        append=append_string(
+            root,
+            config.boot_append.value,
+            target_arch=config.kernel_arch.value,
+        ),
     )
 
 

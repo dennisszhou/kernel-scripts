@@ -13,6 +13,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kbake.forge_cli import main, run_cli
 from kbake.runner import RunError
+from kbake.target import host_target_arch
 
 
 class MissingRunner:
@@ -45,8 +46,9 @@ class ForgeCliTests(unittest.TestCase):
         self.assertIn("created", stdout.getvalue())
         self.assertIn("[images]", contents)
         self.assertIn('dir = "', contents)
+        self.assertIn(f'arch = "{host_target_arch()}"', contents)
         self.assertIn("[qemu]", contents)
-        self.assertIn('binary = "qemu-system-aarch64"', contents)
+        self.assertNotIn("binary =", contents)
 
     def test_config_init_force_replaces_invalid_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
