@@ -7,6 +7,7 @@ from typing import Sequence
 
 from kbake.config import Config, ConfigError, load_config
 from kbake.docker import wants_tty
+from kbake.kernel.boot import BootError, boot_plan
 from kbake.kernel.checkout import CheckoutError, resolve_checkout
 from kbake.kernel.kbuild import (
     KbuildError,
@@ -36,7 +37,14 @@ def run_cli(argv: Sequence[str] | None, *, runner: Runner) -> int:
     try:
         config = load_config(path=args.config, overrides=overrides(args))
         return args.func(args, config, runner)
-    except (CheckoutError, CliError, ConfigError, KbuildError) as exc:
+    except (
+        BootError,
+        CheckoutError,
+        CliError,
+        ConfigError,
+        FileNotFoundError,
+        KbuildError,
+    ) as exc:
         print(f"kbake: {exc}", file=sys.stderr)
         return getattr(exc, "code", 2)
     except KeyboardInterrupt:
@@ -78,12 +86,31 @@ def build_parser() -> argparse.ArgumentParser:
     shell.add_argument("--dry-run", action="store_true", help="print Docker command")
     shell.set_defaults(func=cmd_shell)
 
+    boot = subparsers.add_parser("boot", help="boot the kernel under QEMU")
+    root = boot.add_mutually_exclusive_group()
+    root.add_argument("--rootfs", nargs="?", const=True, metavar="PATH")
+    root.add_argument("--initramfs", nargs="?", const=True, metavar="PATH")
+    boot.add_argument("--kernel", help="kernel image path")
+    boot.add_argument("--memory", help="QEMU memory size")
+    boot.add_argument("--cpus", type=int, help="QEMU CPU count")
+    boot.add_argument("--append", help="extra kernel command-line text")
+    boot.add_argument("--qemu", help="QEMU binary name or path")
+    boot.add_argument("--qemu-cpu", help="QEMU CPU model")
+    boot.add_argument("--dry-run", action="store_true", help="print QEMU command")
+    boot.set_defaults(func=cmd_boot)
+
     return parser
 
 
 def overrides(args: argparse.Namespace) -> dict[str, object | None]:
     return {
         "builder.image": getattr(args, "builder_image", None),
+        "boot.kernel_image": getattr(args, "kernel", None),
+        "boot.memory": getattr(args, "memory", None),
+        "boot.cpus": getattr(args, "cpus", None),
+        "boot.append": getattr(args, "append", None),
+        "qemu.binary": getattr(args, "qemu", None),
+        "qemu.cpu": getattr(args, "qemu_cpu", None),
     }
 
 
@@ -136,6 +163,30 @@ def cmd_shell(
     checkout = resolve_checkout(config, explicit=args.checkout)
     spec = shell_spec(config, checkout, root=args.root, tty=True)
     return run_or_print(spec.argv(), args.dry_run, runner)
+
+
+def cmd_boot(
+    args: argparse.Namespace,
+    config: Config,
+    runner: Runner,
+) -> int:
+    checkout = resolve_checkout(config, explicit=args.checkout)
+    plan = boot_plan(
+        config,
+        checkout,
+        rootfs=args.rootfs,
+        initramfs=args.initramfs,
+    )
+    print(f"Checkout:    {checkout.path}")
+    print(f"Accelerator: {plan.accel.label}")
+    print(f"Kernel:      {plan.kernel}")
+    print(f"Root:        {plan.root.kind} ({plan.root.path})")
+    print(f"Memory:      {plan.memory}")
+    print(f"CPUs:        {plan.cpus}")
+    if args.dry_run:
+        print(plan.shell_command())
+        return 0
+    return runner.run(plan.argv()).returncode
 
 
 def run_or_print(argv: Sequence[Arg], dry_run: bool, runner: Runner) -> int:
