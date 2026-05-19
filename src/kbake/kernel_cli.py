@@ -18,7 +18,7 @@ from kbake.kernel.kbuild import (
     normalize_remainder,
 )
 from kbake.kernel.shell import shell_spec
-from kbake.runner import Arg, Runner, format_command
+from kbake.runner import Arg, RunError, Runner, format_command
 
 
 class CliError(Exception):
@@ -44,6 +44,7 @@ def run_cli(argv: Sequence[str] | None, *, runner: Runner) -> int:
         ConfigError,
         FileNotFoundError,
         KbuildError,
+        RunError,
     ) as exc:
         print(f"kbake: {exc}", file=sys.stderr)
         return getattr(exc, "code", 2)

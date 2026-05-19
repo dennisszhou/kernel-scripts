@@ -20,7 +20,7 @@ from kbake.paths import (
     ROOTFS_INITRAMFS_SCRIPT,
     ProjectPaths,
 )
-from kbake.runner import Arg, Runner, format_command
+from kbake.runner import Arg, RunError, Runner, format_command
 
 
 class CliError(Exception):
@@ -41,7 +41,7 @@ def run_cli(argv: Sequence[str] | None, *, runner: Runner) -> int:
             return cmd_config_init(args, config_path(args.config), runner)
         config = load_config(path=args.config, overrides=overrides(args))
         return args.func(args, config, runner)
-    except (CliError, ConfigError, ValueError) as exc:
+    except (CliError, ConfigError, RunError, ValueError) as exc:
         print(f"kforge: {exc}", file=sys.stderr)
         return getattr(exc, "code", 2)
     except KeyboardInterrupt:

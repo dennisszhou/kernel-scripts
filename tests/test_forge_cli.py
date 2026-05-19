@@ -11,7 +11,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from kbake.forge_cli import main
+from kbake.forge_cli import main, run_cli
+from kbake.runner import RunError
+
+
+class MissingRunner:
+    def run(self, argv: object, *, cwd: Path | None = None) -> object:
+        del argv, cwd
+        raise RunError("missing executable: docker")
 
 
 class ForgeCliTests(unittest.TestCase):
@@ -99,6 +106,15 @@ image = "test-builder"
         self.assertEqual(code, 0)
         self.assertIn("docker build", stdout.getvalue())
         self.assertIn("test-builder", stdout.getvalue())
+
+    def test_runner_error_is_reported_without_traceback(self) -> None:
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            code = run_cli(["builder", "build"], runner=MissingRunner())  # type: ignore[arg-type]
+
+        self.assertEqual(code, 2)
+        self.assertIn("missing executable: docker", stderr.getvalue())
 
     def test_rootfs_build_dry_run_uses_selected_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

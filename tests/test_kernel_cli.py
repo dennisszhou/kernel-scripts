@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kbake.kernel_cli import run_cli
-from kbake.runner import CommandResult
+from kbake.runner import CommandResult, RunError
 
 
 def make_checkout(root: Path, *, with_config: bool = False) -> Path:
@@ -34,6 +34,12 @@ class RecordingRunner:
         command = tuple(str(arg) for arg in argv)  # type: ignore[union-attr]
         self.commands.append(command)
         return CommandResult(command, 0)
+
+
+class MissingRunner:
+    def run(self, argv: object, *, cwd: Path | None = None) -> CommandResult:
+        del argv, cwd
+        raise RunError("missing executable: docker")
 
 
 class KernelCliTests(unittest.TestCase):
@@ -62,6 +68,20 @@ class KernelCliTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(runner.commands[0][-3:], ("make", "ARCH=arm64", "olddefconfig"))
+
+    def test_runner_error_is_reported_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = make_checkout(Path(tmp) / "linux")
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                code = run_cli(
+                    ["-C", str(checkout), "make"],
+                    runner=MissingRunner(),
+                )
+
+        self.assertEqual(code, 2)
+        self.assertIn("missing executable: docker", stderr.getvalue())
 
     def test_build_dry_run_requires_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
