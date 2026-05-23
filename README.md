@@ -2,7 +2,7 @@
 
 Local helpers for a Linux kernel build, rootfs, and QEMU boot loop.
 
-The Python package installs two operational CLIs:
+The `kernel-scripts` Python package installs two operational CLIs:
 
 - `kforge` manages shared local artifacts and config.
 - `kbake` operates on a Linux kernel checkout.
