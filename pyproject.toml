@@ -12,6 +12,7 @@ dependencies = []
 [project.scripts]
 kforge = "kbake.forge_cli:main"
 kbake = "kbake.kernel_cli:main"
+mdcli = "maildir_patches.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -1,0 +1,350 @@
+from __future__ import annotations
+
+import argparse
+import mailbox
+import re
+import shutil
+import sys
+from dataclasses import dataclass
+from email.message import Message
+from pathlib import Path
+
+PATCH_SUBJECT_PATTERNS = [
+    re.compile(
+        r"^\s*\[(?:.*?[^\d/])?\s*(?:[vV]\d*)?\s*(\d+)\s*(?:/\s*\d+)?\s*"
+        r"(?:[^0-9/].*)?\]\s*((?:\S.*\S)|\S)",
+        re.I,
+    ),
+    re.compile(r".*PATCH\s*(\d+)\s*(?:/\s*\d+)?\s*((?:\S.*\S)|\S)", re.I),
+]
+TRIM_SUBJECT_PATTERN = re.compile(r"^\s*(?:\[.*\])?(.*)")
+DEFAULT_MAILDIR = "~/staging"
+MAILDIR_SUBDIRS = ("cur", "new", "tmp")
+UNKNOWN_PATCH_START = 9000
+MAX_SUBJECT_STEM_LEN = 52
+
+
+@dataclass(frozen=True)
+class PatchSubject:
+    number: int
+    title: str
+    inferred: bool = False
+
+
+@dataclass(frozen=True)
+class WrittenPatch:
+    number: int
+    source_idx: int
+    name: str
+
+    @property
+    def sort_key(self) -> tuple[int, int]:
+        return (self.number, self.source_idx)
+
+
+class ConversionError(Exception):
+    def __init__(self, message: str, code: int) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Manage a Maildir patch staging workflow"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    clear_parser = subparsers.add_parser(
+        "clear",
+        help="reset a Maildir staging tree",
+    )
+    add_maildir_arg(clear_parser)
+
+    init_parser = subparsers.add_parser(
+        "init",
+        help="create a Maildir staging tree",
+    )
+    add_maildir_arg(init_parser)
+
+    series_parser = subparsers.add_parser(
+        "series",
+        help="convert a Maildir into numbered patch files",
+    )
+    add_maildir_arg(series_parser)
+    series_parser.add_argument(
+        "-o",
+        "--outdir",
+        default=".",
+        help="directory to write patch files into",
+    )
+
+    return parser.parse_args(argv)
+
+
+def add_maildir_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--maildir",
+        default=DEFAULT_MAILDIR,
+        help=f"Maildir path (default: {DEFAULT_MAILDIR})",
+    )
+
+
+def expand_path(path: str) -> Path:
+    return Path(path).expanduser().resolve()
+
+
+def is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def validate_maildir_target_path(target: Path) -> None:
+    root = Path(target.anchor)
+    if target == root:
+        raise ConversionError(f"refusing to use root directory: {target}", 2)
+
+    home = Path.home().resolve()
+    if target == home:
+        raise ConversionError(f"refusing to use home directory: {target}", 2)
+
+    cwd = Path.cwd().resolve()
+    if is_relative_to(cwd, target):
+        raise ConversionError(
+            f"refusing to use current directory or its parent: {target}",
+            2,
+        )
+
+
+def validate_existing_maildir_target(target: Path) -> None:
+    if not target.is_dir():
+        raise ConversionError(f"not a directory: {target}", 2)
+
+    expected = set(MAILDIR_SUBDIRS)
+    entries = {child.name for child in target.iterdir()}
+    missing = [
+        subdir
+        for subdir in MAILDIR_SUBDIRS
+        if not (target / subdir).is_dir() or (target / subdir).is_symlink()
+    ]
+    extra = sorted(entries - expected)
+    if not missing and not extra:
+        return
+
+    details = []
+    if missing:
+        details.append("missing " + ", ".join(f"{name}/" for name in missing))
+    if extra:
+        details.append("extra " + ", ".join(extra))
+    raise ConversionError(
+        f"refusing to use non-Maildir tree {target}: {'; '.join(details)}",
+        2,
+    )
+
+
+def ensure_clearable_maildir(target: Path) -> None:
+    if not target.exists():
+        raise ConversionError(f"missing Maildir: {target}; run mdcli init first", 2)
+    validate_existing_maildir_target(target)
+
+
+def init_maildir(raw_maildir: Path) -> Path:
+    expanded = raw_maildir.expanduser()
+    if expanded.is_symlink():
+        raise ConversionError(f"refusing to init symlinked Maildir: {expanded}", 2)
+
+    target = expanded.resolve()
+    validate_maildir_target_path(target)
+
+    try:
+        if target.exists():
+            if not target.is_dir():
+                raise ConversionError(f"not a directory: {target}", 2)
+            if any(target.iterdir()):
+                validate_existing_maildir_target(target)
+                return target
+        else:
+            target.mkdir(parents=True)
+
+        for subdir in MAILDIR_SUBDIRS:
+            (target / subdir).mkdir()
+    except OSError as exc:
+        raise ConversionError(f"failed to init Maildir {target}: {exc}", 2)
+
+    return target
+
+
+def reset_maildir(raw_maildir: Path) -> Path:
+    expanded = raw_maildir.expanduser()
+    if expanded.is_symlink():
+        raise ConversionError(f"refusing to clear symlinked Maildir: {expanded}", 2)
+
+    target = expanded.resolve()
+    validate_maildir_target_path(target)
+
+    try:
+        ensure_clearable_maildir(target)
+
+        for subdir in MAILDIR_SUBDIRS:
+            shutil.rmtree(target / subdir)
+            (target / subdir).mkdir()
+    except OSError as exc:
+        raise ConversionError(f"failed to reset Maildir {target}: {exc}", 2)
+
+    return target
+
+
+def format_subject(subject: str) -> str:
+    out = []
+    last_was_alnum = False
+    for char in subject:
+        if char.isalnum():
+            out.append(char)
+            last_was_alnum = True
+            continue
+        if last_was_alnum:
+            out.append("_")
+        last_was_alnum = False
+
+    stem = "".join(out).strip("_").lower()
+    if not stem:
+        return "untitled"
+    return stem[:MAX_SUBJECT_STEM_LEN]
+
+
+def parse_patch_subject(subject: str, fallback_idx: int) -> PatchSubject:
+    normalized = " ".join(subject.splitlines())
+
+    for pattern in PATCH_SUBJECT_PATTERNS:
+        match = pattern.match(normalized)
+        if match:
+            return PatchSubject(int(match.group(1)), match.group(2))
+
+    match = TRIM_SUBJECT_PATTERN.match(normalized)
+    trimmed = match.group(1) if match else normalized
+    trimmed = trimmed.strip() or normalized.strip() or "untitled"
+    return PatchSubject(fallback_idx, trimmed, inferred=True)
+
+
+class Converter:
+    def __init__(self, maildir: Path, output_dir: Path) -> None:
+        self.maildir = maildir
+        self.output_dir = output_dir
+        self.used_names: set[str] = set()
+        self.next_unknown = UNKNOWN_PATCH_START
+
+    def run(self) -> int:
+        self.validate()
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        messages = self.load()
+        if not messages:
+            raise ConversionError(f"Maildir is empty: {self.maildir}", 1)
+
+        patches: list[WrittenPatch] = []
+        for source_idx, (_, message) in enumerate(messages, start=1):
+            patch = self.write_one(source_idx, message)
+            if patch is not None:
+                patches.append(patch)
+
+        if not patches:
+            raise ConversionError(
+                "No messages with usable Subject headers were written", 1
+            )
+
+        if len(patches) > 1:
+            self.write_series(patches)
+
+        return len(patches)
+
+    def validate(self) -> None:
+        if not self.maildir.is_dir():
+            raise ConversionError(f"missing Maildir: {self.maildir}", 2)
+
+        for subdir in MAILDIR_SUBDIRS:
+            child = self.maildir / subdir
+            if not child.is_dir():
+                raise ConversionError(
+                    f"not a Maildir (missing {subdir}/): {self.maildir}", 2
+                )
+
+    def load(self) -> list[tuple[str, Message]]:
+        try:
+            source = mailbox.Maildir(str(self.maildir), factory=None, create=False)
+            keys = sorted(source.iterkeys())
+            return [(key, source[key]) for key in keys]
+        except OSError as exc:
+            raise ConversionError(f"failed to read Maildir {self.maildir}: {exc}", 2)
+
+    def write_one(self, source_idx: int, message: Message) -> WrittenPatch | None:
+        subject = message.get("subject")
+        if subject is None:
+            print(
+                f"warning: message {source_idx} is missing Subject, skipping",
+                file=sys.stderr,
+            )
+            return None
+
+        parsed = parse_patch_subject(subject, self.next_unknown)
+        if parsed.inferred:
+            self.next_unknown += 1
+
+        stem = f"{parsed.number:04d}-{format_subject(parsed.title)}"
+        name = self.unique_name(stem)
+        with (self.output_dir / name).open("wb") as patch_file:
+            patch_file.write(message.as_bytes(unixfrom=True))
+
+        return WrittenPatch(parsed.number, source_idx, name)
+
+    def unique_name(self, stem: str) -> str:
+        name = f"{stem}.patch"
+        suffix = 2
+        while name in self.used_names or (self.output_dir / name).exists():
+            name = f"{stem}-{suffix}.patch"
+            suffix += 1
+        self.used_names.add(name)
+        return name
+
+    def write_series(self, patches: list[WrittenPatch]) -> None:
+        series_path = self.output_dir / "series"
+        with series_path.open("w", encoding="utf-8") as series_file:
+            for patch in sorted(patches, key=lambda item: item.sort_key):
+                series_file.write(f"{patch.name}\n")
+
+
+def run_cli(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+
+    try:
+        if args.command == "clear":
+            maildir_path = reset_maildir(Path(args.maildir))
+            print(f"Reset Maildir at {maildir_path}")
+            return 0
+
+        if args.command == "init":
+            maildir_path = init_maildir(Path(args.maildir))
+            print(f"Initialized Maildir at {maildir_path}")
+            return 0
+
+        if args.command == "series":
+            maildir_path = expand_path(args.maildir)
+            output_dir = expand_path(args.outdir)
+            written_count = Converter(maildir_path, output_dir).run()
+            suffix = "es" if written_count != 1 else ""
+            print(f"Wrote {written_count} patch{suffix} to {output_dir}")
+            return 0
+    except ConversionError as exc:
+        print(exc, file=sys.stderr)
+        return exc.code
+
+    raise AssertionError(f"unhandled command: {args.command}")
+
+
+def main() -> int:
+    return run_cli()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

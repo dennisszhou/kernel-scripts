@@ -2,18 +2,21 @@
 
 Local helpers for a Linux kernel build, rootfs, and QEMU boot loop.
 
-The `kernel-scripts` Python package installs two operational CLIs:
+The `kernel-scripts` Python package installs local helper CLIs:
 
 - `kforge` manages shared local artifacts and config.
 - `kbake` operates on a Linux kernel checkout.
+- `mdcli` manages a Maildir-to-patch staging workflow.
 
 Run them directly from this checkout, through `uv`, or after editable install:
 
 ```sh
 bin/kforge --help
 bin/kbake --help
+bin/mdcli --help
 uv run kforge --help
 uv run kbake --help
+uv run mdcli --help
 make install
 ```
 
@@ -207,6 +210,24 @@ installs.
 When the target architecture matches the host, `kbake boot` uses HVF on macOS
 or KVM on Linux with `/dev/kvm`. When the target differs from the host, it falls
 back to TCG emulation.
+
+## mdcli
+
+Initialize or reset the default patch staging Maildir:
+
+```sh
+mdcli init
+mdcli clear
+```
+
+Convert messages from a Maildir into numbered patch files and a `series` file:
+
+```sh
+mdcli series --maildir ~/staging --outdir /tmp/patches
+```
+
+The default Maildir is `~/staging`. `mdcli init` and `mdcli clear` refuse root,
+the home directory, the current directory, and non-Maildir trees.
 
 ## Tests
 

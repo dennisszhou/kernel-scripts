@@ -1,0 +1,1 @@
+"""Maildir patch staging helpers."""
