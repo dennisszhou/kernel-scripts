@@ -7,6 +7,7 @@ The `kernel-scripts` Python package installs local helper CLIs:
 - `kforge` manages shared local artifacts and config.
 - `kbake` operates on a Linux kernel checkout.
 - `mdcli` manages a Maildir-to-patch staging workflow.
+- `patchreview` opens an ordered patch series in Neovim diff views.
 
 Run them directly from this checkout, through `uv`, or after editable install:
 
@@ -14,9 +15,11 @@ Run them directly from this checkout, through `uv`, or after editable install:
 bin/kforge --help
 bin/kbake --help
 bin/mdcli --help
+bin/patchreview --help
 uv run kforge --help
 uv run kbake --help
 uv run mdcli --help
+uv run patchreview --help
 make install
 ```
 
@@ -228,6 +231,18 @@ mdcli series --maildir ~/staging --outdir /tmp/patches
 
 The default Maildir is `~/staging`. `mdcli init` and `mdcli clear` refuse root,
 the home directory, the current directory, and non-Maildir trees.
+
+## patchreview
+
+Open an ordered patch directory in Neovim:
+
+```sh
+patchreview /tmp/patches
+```
+
+When the directory contains a `series` file, patches are reviewed in that order.
+Without a `series` file, `patchreview` reviews files matching `*.patch` in
+sorted order. Pass additional Neovim arguments after `--`.
 
 ## Tests
 
