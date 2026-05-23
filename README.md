@@ -9,23 +9,26 @@ The `kernel-scripts` Python package installs local helper CLIs:
 - `mdcli` manages a Maildir-to-patch staging workflow.
 - `patchreview` opens an ordered patch series in Neovim diff views.
 
-Run them directly from this checkout, through `uv`, or after editable install:
+Run them through `uv`, or install editable launchers into this checkout's
+`bin/` directory:
 
 ```sh
-bin/kforge --help
-bin/kbake --help
-bin/mdcli --help
-bin/patchreview --help
 uv run kforge --help
 uv run kbake --help
 uv run mdcli --help
 uv run patchreview --help
 make install
+bin/kforge --help
+bin/kbake --help
+bin/mdcli --help
+bin/patchreview --help
 ```
 
-After `make install`, `uv tool install --force -e .` owns the installed
-commands. Because the install is editable, changes in this checkout are
-reflected without reinstalling.
+After `make install`, `uv tool install --force -e .` owns the generated
+launchers in `bin/`; the Makefile creates that directory when needed. Because
+the install is editable, changes in this checkout are reflected without
+reinstalling. Add this checkout's `bin/` directory to `PATH` to find the
+generated commands by name.
 
 ## Quick Start
 
