@@ -244,6 +244,15 @@ When the directory contains a `series` file, patches are reviewed in that order.
 Without a `series` file, `patchreview` reviews files matching `*.patch` in
 sorted order. Pass additional Neovim arguments after `--`.
 
+Review the current Git branch as a linear patch series from a base commit:
+
+```sh
+patchreview --base <base-commit>
+```
+
+The `--base` mode reviews commits in `BASE..HEAD`, reads snapshots from Git
+objects, and rejects merge commits.
+
 ## Tests
 
 Run the test suite with:
